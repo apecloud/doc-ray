@@ -1,19 +1,20 @@
 import asyncio  # Required for background task execution
-import json  # Added for parsing JSON parameters
 import logging
 import os  # Added for os.getenv
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Union
 
 import ray
-from fastapi import (  # Removed BackgroundTasks, Added File, UploadFile, Form
+import ray.serve.handle
+from fastapi import (  # Removed BackgroundTasks, Added File, UploadFile, Form; File, UploadFile, Form were added
     FastAPI,
     File,
-    Form,
     HTTPException,
     UploadFile,
 )
-from pydantic import BaseModel  # File, UploadFile, Form were added
+from pydantic import BaseModel, field_serializer
 from ray import serve
+
+from .mineru_parser import SUPPORTED_EXTENSIONS
 
 # Import project components
 from .parser import DocumentParser
@@ -48,53 +49,68 @@ class StatusResponse(BaseModel):
     error: Optional[str] = None
 
 
+class Result(BaseModel):
+    markdown: str
+    middle_json: str  # This is likely a JSON string already, or a dict
+    images_zip_bytes: Optional[bytes] = None
+
+    @field_serializer("images_zip_bytes")
+    def serialize_images_zip_bytes(self, v: Optional[bytes], _info):
+        if v is None:
+            return None
+        import base64
+
+        return base64.b64encode(v).decode("utf-8")
+
+
 class ResultResponse(BaseModel):
     job_id: str
     status: str
-    result: Optional[Any] = None
+    result: Optional[Result] = None
     error: Optional[str] = None
     message: Optional[str] = None
 
 
 # --- Standalone Ray Remote Function for Parsing ---
-async def _execute_parsing_task_async_logic( # Renamed to indicate it's the async core
+async def _execute_parsing_task_async_logic(  # Renamed to indicate it's the async core
     job_id: str,
-    document_object_ref: ray.ObjectRef,
+    document_object_ref: Union[ray.ObjectRef, bytes],
+    filename: str,
     parser_type: Optional[str],
     parser_params: Optional[Dict[str, Any]],
-    filename: Optional[str],
     file_content_type: Optional[str],
-    parser_deployment_handle: serve.handle.DeploymentHandle,
+    parser_deployment_handle: ray.serve.handle.DeploymentHandle,
     state_manager_actor_handle: JobStateManager,
 ):
     """
     Core asynchronous logic for parsing.
     """
-    logger.info(
-        f"Async parsing logic started for job_id: {job_id}, file: {filename}"
-    )
+    logger.info(f"Async parsing logic started for job_id: {job_id}, file: {filename}")
     try:
-        parsed_result = await parser_deployment_handle.parse.remote(
+        result = await parser_deployment_handle.parse.remote(
             document_object_ref,
+            filename,
             job_id,
             parser_type,
             parser_params,
-            file_content_type,
         )
-        await state_manager_actor_handle.store_job_result.remote(job_id, parsed_result)
+        await state_manager_actor_handle.store_job_result.remote(job_id, result)
         logger.info(f"Parsing successful for job_id: {job_id}. Result stored.")
     except Exception as e:
         error_msg = f"Error during remote parsing for job_id {job_id} (file: {filename}): {str(e)}"
         logger.error(error_msg, exc_info=True)
-        await state_manager_actor_handle.update_job_status.remote(job_id, "failed", error_message=error_msg)
+        await state_manager_actor_handle.update_job_status.remote(
+            job_id, "failed", error_message=error_msg
+        )
+
 
 @ray.remote
 def execute_parsing_task_remotely(
     job_id: str,
-    document_object_ref: ray.ObjectRef,
+    document_object_ref: Union[ray.ObjectRef, bytes],
+    filename: str,
     parser_type: Optional[str],
     parser_params: Optional[Dict[str, Any]],
-    filename: Optional[str],
     file_content_type: Optional[str],
     parser_deployment_handle: serve.handle.DeploymentHandle,
     state_manager_actor_handle: JobStateManager,
@@ -112,7 +128,19 @@ def execute_parsing_task_remotely(
     except RuntimeError:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-    loop.run_until_complete(_execute_parsing_task_async_logic(job_id, document_object_ref, parser_type, parser_params, filename, file_content_type, parser_deployment_handle, state_manager_actor_handle))
+    loop.run_until_complete(
+        _execute_parsing_task_async_logic(
+            job_id,
+            document_object_ref,
+            filename,
+            parser_type,
+            parser_params,
+            file_content_type,
+            parser_deployment_handle,
+            state_manager_actor_handle,
+        )
+    )
+
 
 # --- Ray Serve Deployment ---
 @serve.deployment(
@@ -138,22 +166,24 @@ class ServeController:
     async def submit_document(
         self,
         file: UploadFile = File(...),
-        parser_type: Optional[str] = Form(None),
-        parser_params_json: Optional[str] = Form(None),  # JSON string for params
     ):
         """
         Submits a document (via file upload) for asynchronous parsing.
         Optionally specify a parser_type (string) and parser_params (JSON string).
         """
-        logger.info(
-            f"Received submission request with file: '{file.filename}', "
-            f"content_type: {file.content_type}, parser_type: {parser_type}, "
-            f"parser_params_json provided: {bool(parser_params_json)}"
-        )
+        logger.info(f"Received submission request with file: '{file.filename}', ")
 
         if not file.filename or file.size == 0:
             raise HTTPException(
                 status_code=400, detail="File seems to be empty or invalid."
+            )
+
+        # Check if the file format is supported
+        file_extension = os.path.splitext(file.filename)[1].lower()
+        if file_extension not in SUPPORTED_EXTENSIONS:
+            raise HTTPException(
+                status_code=415,
+                detail=f"Unsupported file format: {file_extension}. Supported formats are: {', '.join(SUPPORTED_EXTENSIONS)}",
             )
 
         document_content_bytes = await file.read()
@@ -165,26 +195,10 @@ class ServeController:
             f"Document content for '{file.filename}' stored in Ray object store: {document_object_ref.hex()}"
         )
 
-        parser_params: Optional[Dict[str, Any]] = {}
-        if parser_params_json:
-            try:
-                parser_params = json.loads(parser_params_json)
-                if not isinstance(parser_params, dict):
-                    raise ValueError("parser_params_json must decode to a dictionary.")
-            except json.JSONDecodeError:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Invalid JSON format for parser_params_json.",
-                )
-            except ValueError as e:
-                raise HTTPException(status_code=400, detail=str(e))
-
         job_initial_data = {
             "filename": file.filename,
             "content_type": file.content_type,
             "size": file.size,
-            "parser_type": parser_type,
-            "parser_params": parser_params,
         }
         job_id = await self._state_manager.submit_job.remote(
             initial_data=job_initial_data
@@ -198,13 +212,13 @@ class ServeController:
         # Launch the standalone Ray remote function for parsing
         execute_parsing_task_remotely.remote(
             job_id,
-            document_object_ref,  # Pass the ObjectRef directly
-            parser_type,
-            parser_params,
+            document_object_ref,
             file.filename,
+            None,
+            None,
             file.content_type,
-            self._parser_deployment_handle, # Pass the parser handle
-            self._state_manager,            # Pass the state manager handle
+            self._parser_deployment_handle,  # Pass the parser handle
+            self._state_manager,  # Pass the state manager handle
         )
         logger.info(
             f"Parsing task for job_id {job_id} (file: '{file.filename}') submitted to run on Ray actor."
@@ -239,7 +253,13 @@ class ServeController:
         if current_status == "completed":
             result_data = await self._state_manager.get_job_result.remote(job_id)
             return ResultResponse(
-                job_id=job_id, status=current_status, result=result_data
+                job_id=job_id,
+                status=current_status,
+                result=Result(
+                    markdown=result_data.markdown,
+                    middle_json=result_data.middle_json,
+                    images_zip_bytes=result_data.images_zip_bytes,
+                ),
             )
         elif current_status == "failed":
             error_detail = await self._state_manager.get_job_result.remote(

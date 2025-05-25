@@ -66,5 +66,4 @@ dist/
 .vscode/
 
 # Project related
-testarag/
-config.yaml
+magic-pdf.json
