@@ -1,7 +1,8 @@
-import ray
-import uuid
 import logging
-from typing import Dict, Any, Optional
+import uuid
+from typing import Any, Dict, Optional
+
+import ray
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -15,20 +16,35 @@ class JobStateManager:
 
     def submit_job(self, initial_data: Optional[Any] = None) -> str:
         job_id = str(uuid.uuid4())
+
+        # Adapt initial_data_summary for the new structure
+        data_summary = "N/A"
+        if initial_data and isinstance(initial_data, dict):
+            filename = initial_data.get("filename", "N/A")
+            content_type = initial_data.get("content_type", "N/A")
+            size_bytes = initial_data.get("size", "N/A")
+            parser_type_info = initial_data.get("parser_type", "default")
+            data_summary = (
+                f"File: {filename}, Type: {content_type}, Size: {size_bytes} bytes, "
+                f"Parser: {parser_type_info}"
+            )
+        elif initial_data: # Fallback for other types, though not expected now
+            data_summary = str(initial_data)[:200]
+
         self._job_states[job_id] = {
             "status": "processing",
             "result": None,
             "error": None,
-            "initial_data_summary": str(initial_data)[:200] if initial_data else "N/A" # Store a summary
+            "initial_data_summary": data_summary
         }
-        logger.info(f"Job {job_id} submitted. Initial status: processing.")
+        logger.info(f"Job {job_id} submitted. Initial status: processing. Summary: {data_summary}")
         return job_id
 
     def get_job_status(self, job_id: str) -> Optional[Dict[str, Any]]:
         if job_id not in self._job_states:
             logger.warning(f"Attempted to get status for unknown job_id: {job_id}")
             return None
-        
+
         status_info = {
             "job_id": job_id,
             "status": self._job_states[job_id]["status"],
@@ -41,7 +57,7 @@ class JobStateManager:
         if job_id not in self._job_states:
             logger.warning(f"Attempted to get result for unknown job_id: {job_id}")
             return None
-        
+
         if self._job_states[job_id]["status"] == "completed":
             logger.info(f"Fetching result for completed job_id {job_id}.")
             return self._job_states[job_id]["result"]
@@ -56,7 +72,7 @@ class JobStateManager:
         if job_id not in self._job_states:
             logger.warning(f"Attempted to update status for unknown job_id: {job_id}")
             return False # Or raise an error
-        
+
         self._job_states[job_id]["status"] = status
         if error_message:
             self._job_states[job_id]["error"] = error_message
@@ -67,7 +83,7 @@ class JobStateManager:
         if job_id not in self._job_states:
             logger.warning(f"Attempted to store result for unknown job_id: {job_id}")
             return False # Or raise an error
-            
+
         self._job_states[job_id]["result"] = result_data
         self._job_states[job_id]["status"] = "completed" # Automatically mark as completed when result is stored
         logger.info(f"Stored result for job_id {job_id} and marked as completed.")
@@ -80,7 +96,7 @@ class JobStateManager:
 # Example of how to use the actor (for testing purposes)
 if __name__ == "__main__":
     ray.init(ignore_reinit_error=True)
-    
+
     async def main():
         # Create or get the actor
         # Actors are named, so getting it again with the same name returns the existing actor.
@@ -106,7 +122,7 @@ if __name__ == "__main__":
         await state_manager.update_job_status.remote(job_id_1, "processing_step_2")
         status_1_updated = await state_manager.get_job_status.remote(job_id_1)
         print(f"Updated status for job {job_id_1}: {status_1_updated}")
-        
+
         # Test store_job_result
         await state_manager.store_job_result.remote(job_id_1, {"parsed_text": "This is the parsed result for job 1."})
         result_1 = await state_manager.get_job_result.remote(job_id_1)
@@ -121,13 +137,13 @@ if __name__ == "__main__":
         # Test getting status for a non-existent job
         status_unknown = await state_manager.get_job_status.remote("unknown_job_id")
         print(f"Status for unknown job: {status_unknown}")
-        
+
         all_jobs = await state_manager.get_all_jobs.remote()
         print(f"All jobs: {all_jobs}")
 
     import asyncio
     asyncio.run(main())
-    
+
     # Clean up actor after test (optional, as it's a named actor)
     # try:
     #    actor_to_kill = ray.get_actor("JobStateManagerActor")

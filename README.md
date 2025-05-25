@@ -1,4 +1,5 @@
-# Asynchronous Document Parsing Service with Ray Serve
+doc-ray
+=======
 
 This project implements an asynchronous document parsing service using Ray Serve. Users can submit documents, poll for parsing status, and retrieve results. It's designed for both standalone local development and cluster deployment.
 
@@ -46,15 +47,13 @@ doc_parser_service/
 2.  **Create and activate a virtual environment using `uv`**:
     ```bash
     uv venv
-    source .venv/bin/activate  # On Linux/macOS
-    # .venv\Scriptsctivate    # On Windows
+    source .venv/bin/activate
     ```
 
 3.  **Install dependencies using `uv`**:
     ```bash
-    uv pip install -r pyproject.toml
+    uv sync
     ```
-    *(Note: `pyproject.toml` is used directly as a requirements file here. If you generate a `requirements.txt` or `uv.lock` from it, you'd use that instead.)*
 
 4.  **Run the service locally**:
     The `run.py` script initializes a local Ray instance and deploys the Ray Serve application.

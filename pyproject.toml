@@ -6,6 +6,7 @@ requires-python = ">=3.10"
 dependencies = [
     "ray[serve]",
     "fastapi",
+    "python-multipart>=0.0.20",
 ]
 
 [tool.uv]
