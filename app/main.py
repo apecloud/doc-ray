@@ -71,6 +71,11 @@ class ResultResponse(BaseModel):
     message: Optional[str] = None
 
 
+class DeleteResponse(BaseModel):
+    job_id: str
+    message: str
+
+
 # --- Standalone Ray Remote Function for Parsing ---
 async def _execute_parsing_task_async_logic(  # Renamed to indicate it's the async core
     job_id: str,
@@ -283,6 +288,16 @@ class ServeController:
                 message=f"Job is in state: {current_status}.",
             )
 
+    @app.delete("/result/{job_id}", response_model=DeleteResponse)
+    async def delete_result(self, job_id: str):
+        """
+        Deletes a job and its associated result to free up memory.
+        """
+        logger.info(f"Received delete request for job_id: {job_id}")
+        await self._state_manager.delete_job.remote(job_id)
+        return DeleteResponse(
+            job_id=job_id, message="Job and result deleted successfully."
+        )
 
 # --- Application Entrypoint for Ray Serve ---
 # This defines how Ray Serve should build and run the application.

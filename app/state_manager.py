@@ -89,6 +89,16 @@ class JobStateManager:
         logger.info(f"Stored result for job_id {job_id} and marked as completed.")
         return True
 
+    def delete_job(self, job_id: str) -> bool:
+        if job_id in self._job_states:
+            del self._job_states[job_id]
+            logger.info(f"Job {job_id} and its result have been deleted.")
+            return True
+        else:
+            logger.warning(f"Attempted to delete unknown job_id: {job_id}")
+            return False
+
+
     def get_all_jobs(self) -> Dict[str, Dict[str, Any]]:
         ''' Utility method to view all job states (for debugging/admin) '''
         return self._job_states
@@ -141,6 +151,11 @@ if __name__ == "__main__":
         all_jobs = await state_manager.get_all_jobs.remote()
         print(f"All jobs: {all_jobs}")
 
+        # Test delete_job
+        delete_status = await state_manager.delete_job.remote(job_id_1)
+        print(f"Deletion status for job {job_id_1}: {delete_status}")
+        status_after_delete = await state_manager.get_job_status.remote(job_id_1)
+        print(f"Status for job {job_id_1} after deletion: {status_after_delete}")
     import asyncio
     asyncio.run(main())
 

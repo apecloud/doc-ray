@@ -11,24 +11,6 @@ This project implements an asynchronous document parsing service using Ray Serve
 - **Containerized**: Dockerfile provided for easy building and deployment.
 - **Modern Tooling**: Uses `uv` for package management.
 
-## Project Structure
-
-```
-doc_parser_service/
-├── app/                    # Main application code
-│   ├── __init__.py
-│   ├── main.py             # Ray Serve application, FastAPI endpoints
-│   ├── parser.py           # Document parsing logic (simulated)
-│   └── state_manager.py    # Ray Actor for managing job states
-├── scripts/                # Utility scripts (if any in future)
-├── tests/                  # Unit and integration tests (if any in future)
-├── Dockerfile              # For building the Docker image
-├── pyproject.toml          # Project metadata and dependencies for uv
-├── README.md               # This file
-├── run.py                  # Script to run the service locally
-└── serve_config.yaml       # Ray Serve application configuration
-```
-
 ## Prerequisites
 
 - Python 3.10+
@@ -55,7 +37,13 @@ doc_parser_service/
     uv sync
     ```
 
-4.  **Run the service locally**:
+4.  **Prepare MinerU prerequisites**:
+    Run the script to download models required by MinerU and generate the `magic-pdf.json` file.
+    ```bash
+    python ./scripts/prepare_for_mineru.py
+    ```
+
+5.  **Run the service locally**:
     The `run.py` script initializes a local Ray instance and deploys the Ray Serve application.
     ```bash
     python run.py
@@ -72,8 +60,10 @@ doc_parser_service/
 -   **GET `/status/{job_id}`**: Checks the parsing status.
     -   Response: `{"job_id": "unique_job_id", "status": "processing|completed|failed", "error": "error message if failed"}`
 -   **GET `/result/{job_id}`**: Retrieves the parsing result.
-    -   Response (if completed): `{"job_id": "unique_job_id", "status": "completed", "result": "parsed_content"}`
+    -   Response (if completed): `{"job_id": "unique_job_id", "status": "completed", "result": {"markdown": "parsed markdown content"}}`
     -   Response (if pending/failed): `{"job_id": "unique_job_id", "status": "processing|failed", "message": "...", "error": "..."}`
+-   **DELETE `/result/{job_id}`**: Deletes a job and its result to free up resources.
+    -   Response (if successful): `{"job_id": "unique_job_id", "message": "Job and result deleted successfully."}` (Status 200)
 
 ## Deployment
 
@@ -82,7 +72,7 @@ doc_parser_service/
 The provided `Dockerfile` packages the application into a container.
 
 1.  **Build the Docker image**:
-    From the `doc_parser_service` directory:
+
     ```bash
     docker build -t doc-parser-service .
     ```
@@ -98,7 +88,7 @@ The provided `Dockerfile` packages the application into a container.
 
     The service will be accessible at `http://localhost:8000` on your host machine.
 
-### Cluster Mode
+### Cluster Mode (To be tested)
 
 1.  **Set up a Ray Cluster**:
     Follow the official Ray documentation to set up a multi-node Ray cluster.
@@ -120,11 +110,3 @@ The provided `Dockerfile` packages the application into a container.
     For robust cluster deployment, consider:
     - Packaging your application code and dependencies into a runtime environment (`working_dir` or `py_modules` with a requirements file) specified in your Serve config or when connecting to Ray. The Docker image itself can also be used as a basis for nodes in a Kubernetes-based Ray cluster (e.g., using KubeRay).
     - Configuring `num_replicas`, CPU/GPU resources, and other deployment options in `serve_config.yaml` or directly in the `app.main.py` deployment definition for production needs.
-
-## Future Enhancements
-- Add actual document parsing libraries (e.g., Tika, PyMuPDF).
-- Implement more robust error handling and retries.
-- Add unit and integration tests.
-- Secure API endpoints.
-- Persist job states to an external database instead of just in-memory in the actor (for resilience beyond actor lifetime if the actor crashes or the cluster restarts without detached actor recovery).
-```
