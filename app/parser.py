@@ -1,22 +1,13 @@
 import asyncio
 import logging
-import os  # Added for os.getenv
-from typing import (
-    Any,
-    Dict,
-    Optional,
-    Union,  # Added Union for type hinting
-)
+import os
+from typing import Any, Dict, Optional, Union
 
-import ray  # Added for @ray.remote and ObjectRef
+import ray
 from ray import serve
 
-from app.mineru_parser import MinerUParser, ParseResult  # Added for serve.deployment
+from app.mineru_parser import MinerUParser, ParseResult
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
 logger = logging.getLogger(__name__)
 
 
@@ -31,9 +22,10 @@ logger = logging.getLogger(__name__)
 class DocumentParser:
     def __init__(self):
         # In a real application, this might load models or other resources.
+        logging.basicConfig(level=logging.INFO)
         logger.info("DocumentParser initialized.")
 
-    async def parse(  # Changed from async def
+    async def parse(
         self,
         document_object_ref: Union[ray.ObjectRef, bytes],
         filename: str,
@@ -42,7 +34,7 @@ class DocumentParser:
         parser_params: Optional[Dict[str, Any]] = None,
     ) -> ParseResult:
         # Retrieve the actual document content from the ObjectRef
-        logger.error(
+        logger.info(
             f"Job ID {job_id}: Received document_object_ref of type: {type(document_object_ref)}"
         )
         if isinstance(document_object_ref, ray.ObjectRef):
@@ -79,6 +71,9 @@ class DocumentParser:
             logger.info(f"Completed parsing for job_id: {job_id}")
             return parse_result_obj
         except Exception as e:
-            logger.error(f"Job ID {job_id}: Error during MinerUParser execution: {e}", exc_info=True)
+            logger.error(
+                f"Job ID {job_id}: Error during MinerUParser execution: {e}",
+                exc_info=True,
+            )
             # Re-raise or return an error message string
             raise

@@ -1,9 +1,10 @@
+import base64
+import json
 import logging
 import os
 import shutil
 import tempfile
-import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,7 @@ from magic_pdf.operators.pipes import PipeResult
 
 logger = logging.getLogger(__name__)
 
+# TODO: support image formats
 SUPPORTED_EXTENSIONS = [
     ".pdf",
     # convert to .pdf first
@@ -37,7 +39,7 @@ def get_soffice_cmd() -> str | None:
 class ParseResult:
     markdown: str
     middle_json: str
-    images_zip_bytes: bytes | None
+    images: dict[str, str] = field(default_factory=dict)  # image name => base64-decoded image data
 
 
 class MinerUParser:
@@ -97,24 +99,25 @@ class MinerUParser:
                 result = ds.apply(doc_analyze, ocr=False)
                 pipe_result = result.pipe_txt_mode(image_writer)
 
+            middle_json = None
             if hasattr(pipe_result, "_pipe_res"):
                 adjust_title_level(doc_path, pipe_result._pipe_res)
+                middle_json = json.dumps(pipe_result._pipe_res, ensure_ascii=False)
 
             markdown = pipe_result.get_markdown("images")
-            middle_json = pipe_result.get_middle_json()
+            if middle_json is None:
+                middle_json = pipe_result.get_middle_json()
 
-            images_zip_bytes = None
+            images_dict = {}
             if os.path.exists(local_image_dir) and os.listdir(local_image_dir):
-                zip_path = os.path.join(temp_dir, "images.zip")
-                with zipfile.ZipFile(zip_path, "w") as zf:
-                    for root, _, files in os.walk(local_image_dir):
-                        for file in files:
-                            file_path = os.path.join(root, file)
-                            zf.write(file_path, os.path.relpath(file_path, local_image_dir))
-                with open(zip_path, "rb") as f:
-                    images_zip_bytes = f.read()
+                for root, _, files in os.walk(local_image_dir):
+                    for file in files:
+                        file_path = os.path.join(root, file)
+                        with open(file_path, "rb") as f:
+                            name = f"images/{file}"
+                            images_dict[name] = base64.b64encode(f.read()).decode()
 
-            return ParseResult(markdown=markdown, middle_json=middle_json, images_zip_bytes=images_zip_bytes)
+            return ParseResult(markdown=markdown, middle_json=middle_json, images=images_dict)
         except:
             logger.exception("MinerUParser failed")
             raise

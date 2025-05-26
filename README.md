@@ -67,7 +67,7 @@ This project implements an asynchronous document parsing service using Ray Serve
 
 ## Deployment
 
-### Standalone Mode with Docker
+### Standalone Mode with Docker (To be tested)
 
 The provided `Dockerfile` packages the application into a container.
 

@@ -3,7 +3,7 @@
 # Global settings for the Ray Serve instance
 # http_options:
 #   host: "0.0.0.0"
-#   port: 8000 
+#   port: 8000
 #   # location: "EveryNode" # "HeadOnly" or "EveryNode" for where HTTP proxy runs
 
 # Application definitions
@@ -15,20 +15,20 @@ applications:
     route_prefix: / # Optional: if you want to serve this app under a specific path like /parser
     # deployments: # You can also list deployments explicitly here if not defined in code or for overrides
     #   - name: ServeController # Must match the class name if overriding
-    #     # num_replicas: 2 
+    #     # num_replicas: 2
     #     # user_config: # for reconfigure method
     #     #   some_param: "value"
     # ray_actor_options: # for the head actor of this application
     #   num_cpus: 0.1
 
 # Example of how to define actors that should be running.
-# Note: The JobStateManagerActor is created with lifetime='detached' in main.py,
+# Note: The DocRayJobStateManagerActor is created with lifetime='detached' in main.py,
 # so it doesn't strictly need to be defined here for it to be created by the application code.
 # However, explicitly defining shared actors can be good practice for visibility,
 # especially if they are truly independent of any single application's lifecycle.
 # If defined here, Ray Serve can manage their lifecycle.
 # actors:
-#  - name: "JobStateManagerActor" # Must match the name used in `ray.get_actor`
+#  - name: "DocRayJobStateManagerActor" # Must match the name used in `ray.get_actor`
 #    import_path: "app.state_manager:JobStateManager"
 #    ray_actor_options:
 #      num_cpus: 0.1 # Example resource allocation

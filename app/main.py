@@ -18,7 +18,11 @@ from .mineru_parser import SUPPORTED_EXTENSIONS
 
 # Import project components
 from .parser import DocumentParser
-from .state_manager import JobStateManager  # Actor
+from .state_manager import (  # Actor
+    DEFAULT_JOB_CLEANUP_INTERVAL_SECONDS,
+    DEFAULT_JOB_TTL_SECONDS,
+    JobStateManager,
+)
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -51,16 +55,8 @@ class StatusResponse(BaseModel):
 
 class Result(BaseModel):
     markdown: str
-    middle_json: str  # This is likely a JSON string already, or a dict
-    images_zip_bytes: Optional[bytes] = None
-
-    @field_serializer("images_zip_bytes")
-    def serialize_images_zip_bytes(self, v: Optional[bytes], _info):
-        if v is None:
-            return None
-        import base64
-
-        return base64.b64encode(v).decode("utf-8")
+    middle_json: str
+    images: Dict[str, str]
 
 
 class ResultResponse(BaseModel):
@@ -117,7 +113,7 @@ def execute_parsing_task_remotely(
     parser_type: Optional[str],
     parser_params: Optional[Dict[str, Any]],
     file_content_type: Optional[str],
-    parser_deployment_handle: serve.handle.DeploymentHandle,
+    parser_deployment_handle: ray.serve.handle.DeploymentHandle,
     state_manager_actor_handle: JobStateManager,
 ):
     """
@@ -263,7 +259,7 @@ class ServeController:
                 result=Result(
                     markdown=result_data.markdown,
                     middle_json=result_data.middle_json,
-                    images_zip_bytes=result_data.images_zip_bytes,
+                    images=result_data.images,
                 ),
             )
         elif current_status == "failed":
@@ -323,12 +319,16 @@ try:
     # A common pattern is to get or create the actor handle before defining the bound application.
     # This handle can then be passed to the ServeController.
     state_manager_actor = JobStateManager.options(
-        name="JobStateManagerActor", get_if_exists=True, lifetime="detached"
-    ).remote()
-    logger.info("JobStateManagerActor handle obtained/created.")
+        name="DocRayJobStateManagerActor", get_if_exists=True, lifetime="detached"
+    ).remote(
+        ttl_seconds=int(os.getenv("JOB_TTL_SECONDS", str(DEFAULT_JOB_TTL_SECONDS))),
+        cleanup_interval_seconds=int(os.getenv("JOB_CLEANUP_INTERVAL_SECONDS", str(DEFAULT_JOB_CLEANUP_INTERVAL_SECONDS)))
+
+    )
+    logger.info("DocRayJobStateManagerActor handle obtained/created.")
 except Exception as e:
     logger.error(
-        f"Failed to get or create JobStateManagerActor: {e}. This is critical."
+        f"Failed to get or create DocRayJobStateManagerActor: {e}. This is critical."
     )
     # Depending on the setup, you might want to raise an exception here to stop deployment.
     # For now, we log and proceed, but the service will likely fail.
@@ -353,7 +353,7 @@ if state_manager_actor:  # Ensure StateManager is available
     logger.info("ServeController bound with dependencies. Ready for serving.")
 else:
     logger.critical(
-        "JobStateManagerActor handle is not available. Cannot bind ServeController."
+        "DocRayJobStateManagerActor handle is not available. Cannot bind ServeController."
     )
 
     # Fallback or error handling:
@@ -364,14 +364,14 @@ else:
     def health_check_error():
         return {
             "status": "error",
-            "message": "JobStateManagerActor could not be initialized.",
+            "message": "DocRayJobStateManagerActor could not be initialized.",
         }
 
     entrypoint = (
         app  # Serve the basic FastAPI app with an error message on health check
     )
     logger.info(
-        "Serving a fallback FastAPI app due to JobStateManagerActor initialization failure."
+        "Serving a fallback FastAPI app due to DocRayJobStateManagerActor initialization failure."
     )
 
 # For local testing with `python doc_parser_service/app/main.py` (if you add `if __name__ == "__main__": serve.run(entrypoint)`)
