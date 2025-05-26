@@ -30,11 +30,11 @@ ARG USE_MODELSCOPE="0"
 ENV USE_MODELSCOPE=${USE_MODELSCOPE}
 
 # Define the target directory for Hugging Face models/cache.
-# This can be overridden at build time via --build-arg HF_MODELS_CACHE_PATH=...
-ARG HF_MODELS_CACHE_PATH="/app/models_cache"
-ENV HF_HOME=${HF_MODELS_CACHE_PATH} \
-    HUGGINGFACE_HUB_CACHE=${HF_MODELS_CACHE_PATH} \
-    MODELSCOPE_CACHE=${HF_MODELS_CACHE_PATH}
+# This can be overridden at build time via --build-arg MODELS_CACHE_PATH=...
+ARG MODELS_CACHE_PATH="/app/models_cache"
+ENV HF_HOME=${MODELS_CACHE_PATH} \
+    HUGGINGFACE_HUB_CACHE=${MODELS_CACHE_PATH} \
+    MODELSCOPE_CACHE=${MODELS_CACHE_PATH}
 RUN mkdir -p ${HF_HOME} # Ensure the cache directory exists
 
 WORKDIR /app
@@ -63,14 +63,14 @@ RUN apt update && \
 WORKDIR /app
 # Configure Hugging Face cache path for the application runtime.
 # Use the same ARG as in the model-downloader stage to ensure consistency.
-ARG HF_MODELS_CACHE_PATH="/app/models_cache"
-ENV HF_HOME=${HF_MODELS_CACHE_PATH} \
-    HUGGINGFACE_HUB_CACHE=${HF_MODELS_CACHE_PATH} \
-    MODELSCOPE_CACHE=${HF_MODELS_CACHE_PATH}
+ARG MODELS_CACHE_PATH="/app/models_cache"
+ENV HF_HOME=${MODELS_CACHE_PATH} \
+    HUGGINGFACE_HUB_CACHE=${MODELS_CACHE_PATH} \
+    MODELSCOPE_CACHE=${MODELS_CACHE_PATH}
 
 # Copy the pre-downloaded models from the 'model-downloader' stage.
 COPY --from=model-downloader ${HF_HOME} ${HF_HOME}
-COPY --from=model-downloader /app/magic-pdf.json /app/magic-pdf.json
+COPY --from=model-downloader /app/magic-pdf*.json /app/
 
 # Copy the Python virtual environment from the 'install-deps' stage.
 COPY --from=install-deps /app/.venv /app/.venv

@@ -42,10 +42,29 @@ class ParseResult:
 
 
 class MinerUParser:
+    def _detect_device_mode(self) -> str:
+        if os.getenv("MINERU_DEVICE_MODE") is not None:
+            return os.getenv("MINERU_DEVICE_MODE")
+        try:
+            import torch
+            if torch.cuda.is_available():
+                return "cuda"
+            if torch.mps.is_available():
+                return "mps"
+        except Exception:
+            pass
+        return "cpu"
+
     def _set_config_path(self) -> bool:
         path = Path(os.environ.get("MINERU_CONFIG_JSON", "./magic-pdf.json"))
         if not path.exists():
             return False
+
+        device_mode = self._detect_device_mode()
+        if device_mode != "cpu":
+            derived_conf = str(path).replace(".json", f"-{device_mode}.json")
+            if Path(derived_conf).exists():
+                path = Path(derived_conf)
 
         config_reader.CONFIG_FILE_NAME = str(path.absolute())
 

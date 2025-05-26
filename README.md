@@ -79,16 +79,17 @@ The provided `Dockerfile` packages the application into a container.
 
 2.  **Run the Docker container**:
     ```bash
-    docker run -d -p 8639:8639 -p 8265:8265 --name doc-ray doc-ray
+    docker run -d -p 8639:8639 -p 8265:8265 --gpus=all --name doc-ray doc-ray
     ```
     - `-d`: Run in detached mode.
     - `-p 8639:8639`: Maps the container's port 8639 (Ray Serve HTTP) to the host's port 8639.
     - `-p 8265:8265`: Maps the container's port 8265 (Ray Dashboard) to the host's port 8265.
+    - `--gpus=all`: Enables GPU support if available. Omit this flag if not supported (e.g., on Docker Desktop for macOS). **Deployment with GPUs is strongly recommended.**
     - `--name doc-ray`: Assigns a name to the container for easier management.
 
     The service will be accessible at `http://localhost:8639` on your host machine.
 
-### Cluster Mode (To be tested)
+### Cluster Mode (To be verified)
 
 1.  **Set up a Ray Cluster**:
     Follow the official Ray documentation to set up a multi-node Ray cluster.

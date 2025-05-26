@@ -1,5 +1,6 @@
 # From: https://raw.githubusercontent.com/opendatalab/MinerU/master/scripts/download_models_hf.py
 
+import copy
 import json
 import os
 from urllib.request import urlopen
@@ -34,6 +35,13 @@ def download_and_modify_json(url, local_filename, modifications):
         json.dump(data, f, ensure_ascii=False, indent=4)
 
 
+def _save_json_config(data, filepath):
+    """Helper function to save dictionary data to a JSON file."""
+    with open(filepath, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+    print(f'Successfully generated derived configuration file: {filepath}')
+
+
 def prepare():
     cache_dir = os.environ.get("CACHE_DIR", None)
     if cache_dir:
@@ -65,6 +73,8 @@ def prepare():
     print(f'layoutreader_model_dir is: {layoutreader_model_dir}')
 
     json_url = 'https://github.com/opendatalab/MinerU/raw/master/magic-pdf.template.json'
+    if use_modelscope:
+        json_url = 'https://gcore.jsdelivr.net/gh/opendatalab/MinerU@master/magic-pdf.template.json'
     config_file_name = 'magic-pdf.json'
     config_file = os.path.join(".", config_file_name)
 
@@ -75,6 +85,31 @@ def prepare():
 
     download_and_modify_json(json_url, config_file, json_mods)
     print(f'The configuration file has been configured successfully, the path is: {config_file}')
+
+    # Generate derived configuration files (cuda and mps)
+    print('\nGenerating derived configurations...')
+
+    # Load the freshly created/updated base configuration
+    with open(config_file, 'r', encoding='utf-8') as f:
+        base_config_data = json.load(f)
+
+    base_filename = os.path.basename(config_file) # e.g., "magic-pdf.json"
+    output_dir = os.path.dirname(config_file)     # e.g., "."
+
+    # --- Generate CUDA specific config ---
+    # As per request, using "cude" for the device-mode value.
+    cuda_config_data = copy.deepcopy(base_config_data)
+    cuda_config_data['device-mode'] = 'cude'
+    cuda_filename = base_filename.replace('.json', '-cuda.json')
+    cuda_filepath = os.path.join(output_dir, cuda_filename)
+    _save_json_config(cuda_config_data, cuda_filepath)
+
+    # --- Generate MPS specific config ---
+    mps_config_data = copy.deepcopy(base_config_data)
+    mps_config_data['device-mode'] = 'mps'
+    mps_filename = base_filename.replace('.json', '-mps.json')
+    mps_filepath = os.path.join(output_dir, mps_filename)
+    _save_json_config(mps_config_data, mps_filepath)
 
 
 if __name__ == '__main__':
