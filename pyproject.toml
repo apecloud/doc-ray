@@ -1,0 +1,16 @@
+[project]
+name = "doc-ray"
+version = "0.1.0"
+description = "A document parsing service"
+requires-python = ">=3.10"
+dependencies = [
+    "ray[serve]",
+    "fastapi",
+    "python-multipart>=0.0.20",
+    "magic-pdf[full]>=1.3.5,<2.0.0",
+]
+
+[tool.uv]
+# Add any uv specific configurations here if needed
+# For example, if you want to specify a particular version of a tool
+# tool.uv.sources = { some-package = "==1.2.3" }
