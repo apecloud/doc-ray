@@ -52,7 +52,7 @@ class MinerUParser:
             if torch.mps.is_available():
                 return "mps"
         except Exception:
-            pass
+            logger.exception("_detect_device_mode failed")
         return "cpu"
 
     def _set_config_path(self) -> bool:

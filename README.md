@@ -23,7 +23,7 @@ This project implements an asynchronous document parsing service using Ray Serve
 1.  **Clone the repository (if applicable)**:
     ```bash
     # git clone <repository-url>
-    # cd doc_parser_service
+    # cd doc-ray
     ```
 
 2.  **Create and activate a virtual environment using `uv`**:
@@ -34,7 +34,7 @@ This project implements an asynchronous document parsing service using Ray Serve
 
 3.  **Install dependencies using `uv`**:
     ```bash
-    uv sync
+    uv sync --prerelease=allow
     ```
 
 4.  **Prepare MinerU prerequisites**:

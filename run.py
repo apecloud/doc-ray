@@ -4,10 +4,6 @@ import ray
 from ray import serve
 from ray.serve.config import HTTPOptions, ProxyLocation
 
-# Import the application entrypoint from your app module
-# This assumes your app.main defines 'entrypoint' which is the ServeController.bind() result
-from app.main import entrypoint as doc_parser_app_entrypoint
-
 # Also need the state manager if we want to ensure it's up, though main.py handles its creation.
 # from app.state_manager import JobStateManager
 
@@ -62,6 +58,11 @@ def main():
             proxy_location=ProxyLocation.EveryNode,
             http_options=HTTPOptions(host="0.0.0.0", port=8639),
         )
+
+        # Import the application entrypoint from your app module
+        # This assumes your app.main defines 'entrypoint' which is the ServeController.bind() result
+        # Lazily import app.main here to make sure ray.is_initialized() is True.
+        from app.main import entrypoint as doc_parser_app_entrypoint
 
         logger.info("Deploying the application on Ray Serve...")
         serve.run(

@@ -1,5 +1,5 @@
 [project]
-name = "doc_parser_service"
+name = "doc-ray"
 version = "0.1.0"
 description = "A document parsing service"
 requires-python = ">=3.10"

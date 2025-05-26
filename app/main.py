@@ -295,6 +295,77 @@ class ServeController:
             job_id=job_id, message="Job and result deleted successfully."
         )
 
+
+# Helper function to determine GPU availability for Ray actors
+def get_ray_actor_options_based_on_gpu_availability(
+    default_gpus_per_replica: float = 0.0, gpus_if_available: float = 1.0
+) -> Dict[str, Any]:
+    """
+    Determines Ray actor options, specifically num_gpus, based on cluster GPU availability.
+    This function should be called after ray.init() or when Ray is connected.
+    """
+    ray_actor_options = {
+        "num_cpus": int(os.getenv("NUM_PARSER_CPUS_PER_REPLICA", "1"))
+    }  # Default CPU request
+
+    # Allow overriding via environment variable for explicit control
+    # DOC_RAY_FORCE_GPU_PER_REPLICA: "0", "0.25", "1"
+    force_gpu_str = os.getenv("DOC_RAY_FORCE_GPU_PER_REPLICA")
+    if force_gpu_str is not None:
+        try:
+            forced_gpus = float(force_gpu_str)
+            logger.info(
+                f"DOC_RAY_FORCE_GPU_PER_REPLICA is set to {forced_gpus}. Using this value for num_gpus."
+            )
+            ray_actor_options["num_gpus"] = forced_gpus
+            return ray_actor_options
+        except ValueError:
+            logger.warning(
+                f"Invalid value for DOC_RAY_FORCE_GPU_PER_REPLICA: '{force_gpu_str}'. Ignoring and proceeding with auto-detection."
+            )
+
+    if not ray.is_initialized():
+        logger.warning(
+            "Ray not initialized when trying to determine GPU availability for actor options. Defaulting num_gpus to %s.",
+            default_gpus_per_replica,
+        )
+        ray_actor_options["num_gpus"] = default_gpus_per_replica
+        return ray_actor_options
+
+    try:
+        cluster_gpus = ray.cluster_resources().get("GPU", 0)
+        logger.info(f"Ray cluster reports {cluster_gpus} total GPUs.")
+        if cluster_gpus > 0:
+            logger.info(
+                f"GPUs detected in the cluster. Requesting {gpus_if_available} GPU(s) per replica."
+            )
+            ray_actor_options["num_gpus"] = gpus_if_available
+        else:
+            logger.info(
+                "No GPUs detected in the cluster. Replicas will run on CPU (num_gpus=0)."
+            )
+            ray_actor_options["num_gpus"] = 0.0
+    except Exception as e:
+        logger.error(
+            f"Error checking Ray cluster GPU resources: {e}. Defaulting num_gpus to %s.",
+            default_gpus_per_replica,
+            exc_info=True,
+        )
+        ray_actor_options["num_gpus"] = default_gpus_per_replica
+
+    return ray_actor_options
+
+
+# Determine actor options before defining the deployment.
+# This assumes ray.init() has been called or Ray is connected (e.g., by `serve run`).
+# Request 1 full GPU per replica if any GPU is available in the cluster.
+# If no GPUs, or if detection fails, it defaults to 0 GPUs.
+_parser_actor_options = get_ray_actor_options_based_on_gpu_availability(
+    default_gpus_per_replica=0.0, gpus_if_available=1.0
+)
+logger.info(f"Calculated ray_actor_options for DocumentParser: {_parser_actor_options}")
+
+
 # --- Application Entrypoint for Ray Serve ---
 # This defines how Ray Serve should build and run the application.
 # It's common to define the actor handles and other resources here.
@@ -322,8 +393,12 @@ try:
         name="DocRayJobStateManagerActor", get_if_exists=True, lifetime="detached"
     ).remote(
         ttl_seconds=int(os.getenv("JOB_TTL_SECONDS", str(DEFAULT_JOB_TTL_SECONDS))),
-        cleanup_interval_seconds=int(os.getenv("JOB_CLEANUP_INTERVAL_SECONDS", str(DEFAULT_JOB_CLEANUP_INTERVAL_SECONDS)))
-
+        cleanup_interval_seconds=int(
+            os.getenv(
+                "JOB_CLEANUP_INTERVAL_SECONDS",
+                str(DEFAULT_JOB_CLEANUP_INTERVAL_SECONDS),
+            )
+        ),
     )
     logger.info("DocRayJobStateManagerActor handle obtained/created.")
 except Exception as e:
@@ -348,7 +423,9 @@ if state_manager_actor:  # Ensure StateManager is available
     # Ray Serve will manage the lifecycle of DocumentParserDeployment.
     entrypoint = ServeController.bind(
         state_manager_actor_handle=state_manager_actor,
-        parser_deployment_handle=DocumentParser.bind(),  # Bind DocumentParser deployment
+        parser_deployment_handle=DocumentParser.options(
+            ray_actor_options=_parser_actor_options
+        ).bind(),  # Bind DocumentParser deployment
     )
     logger.info("ServeController bound with dependencies. Ready for serving.")
 else:
