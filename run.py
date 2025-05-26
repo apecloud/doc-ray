@@ -60,7 +60,7 @@ def main():
         # For local testing, this typically means one proxy on your machine.
         serve.start(
             proxy_location=ProxyLocation.EveryNode,
-            http_options=HTTPOptions(host="0.0.0.0", port=8000),
+            http_options=HTTPOptions(host="0.0.0.0", port=8639),
         )
 
         logger.info("Deploying the application on Ray Serve...")

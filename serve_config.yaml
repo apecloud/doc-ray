@@ -3,7 +3,7 @@
 # Global settings for the Ray Serve instance
 # http_options:
 #   host: "0.0.0.0"
-#   port: 8000
+#   port: 8639
 #   # location: "EveryNode" # "HeadOnly" or "EveryNode" for where HTTP proxy runs
 
 # Application definitions

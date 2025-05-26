@@ -658,7 +658,7 @@ wheels = [
 ]
 
 [[package]]
-name = "doc-parser-service"
+name = "doc-ray"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

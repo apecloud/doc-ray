@@ -48,8 +48,8 @@ This project implements an asynchronous document parsing service using Ray Serve
     ```bash
     python run.py
     ```
-    The service will typically be available at `http://localhost:8000`.
-    - API documentation (Swagger UI) is often available at `http://localhost:8000/docs`.
+    The service will typically be available at `http://localhost:8639`.
+    - API documentation (Swagger UI) is often available at `http://localhost:8639/docs`.
     - Ray Dashboard: `http://localhost:8265`.
 
 ## API Endpoints
@@ -67,26 +67,26 @@ This project implements an asynchronous document parsing service using Ray Serve
 
 ## Deployment
 
-### Standalone Mode with Docker (To be tested)
+### Standalone Mode with Docker
 
 The provided `Dockerfile` packages the application into a container.
 
 1.  **Build the Docker image**:
 
     ```bash
-    docker build -t doc-parser-service .
+    docker build -t doc-ray .
     ```
 
 2.  **Run the Docker container**:
     ```bash
-    docker run -d -p 8000:8000 -p 8265:8265 --name doc-parser-app doc-parser-service
+    docker run -d -p 8639:8639 -p 8265:8265 --name doc-ray doc-ray
     ```
     - `-d`: Run in detached mode.
-    - `-p 8000:8000`: Maps the container's port 8000 (Ray Serve HTTP) to the host's port 8000.
+    - `-p 8639:8639`: Maps the container's port 8639 (Ray Serve HTTP) to the host's port 8639.
     - `-p 8265:8265`: Maps the container's port 8265 (Ray Dashboard) to the host's port 8265.
-    - `--name doc-parser-app`: Assigns a name to the container for easier management.
+    - `--name doc-ray`: Assigns a name to the container for easier management.
 
-    The service will be accessible at `http://localhost:8000` on your host machine.
+    The service will be accessible at `http://localhost:8639` on your host machine.
 
 ### Cluster Mode (To be tested)
 

@@ -12,8 +12,8 @@ logger = logging.getLogger(__name__)
 
 
 # Default TTL values (can be overridden via actor options)
-DEFAULT_JOB_TTL_SECONDS = 20 * 60  # 20 minutes
-DEFAULT_JOB_CLEANUP_INTERVAL_SECONDS = 5 * 60  # 5 minutes
+DEFAULT_JOB_TTL_SECONDS = 30 * 60
+DEFAULT_JOB_CLEANUP_INTERVAL_SECONDS = 5 * 60
 
 
 @ray.remote
