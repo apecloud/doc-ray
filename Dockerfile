@@ -24,15 +24,21 @@ RUN uv sync --no-cache --prerelease=allow
 FROM python:3.11-slim AS model-downloader
 ENV PYTHONUNBUFFERED=1
 
+# Define whether to use ModelScope or Hugging Face models.
+# This can be overridden at build time via --build-arg USE_MODELSCOPE=1
+ARG USE_MODELSCOPE="0"
+ENV USE_MODELSCOPE=${USE_MODELSCOPE}
+
 # Define the target directory for Hugging Face models/cache.
 # This can be overridden at build time via --build-arg HF_MODELS_CACHE_PATH=...
-ARG HF_MODELS_CACHE_PATH="/app/hf_models_cache"
+ARG HF_MODELS_CACHE_PATH="/app/models_cache"
 ENV HF_HOME=${HF_MODELS_CACHE_PATH} \
-    HUGGINGFACE_HUB_CACHE=${HF_MODELS_CACHE_PATH}
+    HUGGINGFACE_HUB_CACHE=${HF_MODELS_CACHE_PATH} \
+    MODELSCOPE_CACHE=${HF_MODELS_CACHE_PATH}
 RUN mkdir -p ${HF_HOME} # Ensure the cache directory exists
 
 WORKDIR /app
-RUN pip install --no-cache-dir huggingface_hub
+RUN pip install --no-cache-dir huggingface_hub modelscope
 COPY scripts/prepare_for_mineru.py ./scripts/prepare_for_mineru.py
 RUN python ./scripts/prepare_for_mineru.py
 
@@ -57,9 +63,10 @@ RUN apt update && \
 WORKDIR /app
 # Configure Hugging Face cache path for the application runtime.
 # Use the same ARG as in the model-downloader stage to ensure consistency.
-ARG HF_MODELS_CACHE_PATH="/app/hf_models_cache"
+ARG HF_MODELS_CACHE_PATH="/app/models_cache"
 ENV HF_HOME=${HF_MODELS_CACHE_PATH} \
-    HUGGINGFACE_HUB_CACHE=${HF_MODELS_CACHE_PATH}
+    HUGGINGFACE_HUB_CACHE=${HF_MODELS_CACHE_PATH} \
+    MODELSCOPE_CACHE=${HF_MODELS_CACHE_PATH}
 
 # Copy the pre-downloaded models from the 'model-downloader' stage.
 COPY --from=model-downloader ${HF_HOME} ${HF_HOME}

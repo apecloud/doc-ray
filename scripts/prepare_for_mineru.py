@@ -4,7 +4,12 @@ import json
 import os
 from urllib.request import urlopen
 
-from huggingface_hub import snapshot_download
+use_modelscope = os.getenv("USE_MODELSCOPE", None) == "1"
+
+if use_modelscope:
+    from modelscope import snapshot_download
+else:
+    from huggingface_hub import snapshot_download
 
 
 def download_json(url):
@@ -45,11 +50,14 @@ def prepare():
     ]
     model_dir = snapshot_download('opendatalab/PDF-Extract-Kit-1.0', allow_patterns=mineru_patterns, cache_dir=cache_dir)
 
-    layoutreader_pattern = [
-        "*.json",
-        "*.safetensors",
-    ]
-    layoutreader_model_dir = snapshot_download('hantian/layoutreader', allow_patterns=layoutreader_pattern, cache_dir=cache_dir)
+    if use_modelscope:
+        layoutreader_model_dir = snapshot_download('ppaanngggg/layoutreader')
+    else:
+        layoutreader_pattern = [
+            "*.json",
+            "*.safetensors",
+        ]
+        layoutreader_model_dir = snapshot_download('hantian/layoutreader', allow_patterns=layoutreader_pattern, cache_dir=cache_dir)
 
     model_dir = model_dir + '/models'
 
