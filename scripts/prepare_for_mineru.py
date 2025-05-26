@@ -97,9 +97,9 @@ def prepare():
     output_dir = os.path.dirname(config_file)     # e.g., "."
 
     # --- Generate CUDA specific config ---
-    # As per request, using "cude" for the device-mode value.
+    # As per request, using "cuda" for the device-mode value.
     cuda_config_data = copy.deepcopy(base_config_data)
-    cuda_config_data['device-mode'] = 'cude'
+    cuda_config_data['device-mode'] = 'cuda'
     cuda_filename = base_filename.replace('.json', '-cuda.json')
     cuda_filepath = os.path.join(output_dir, cuda_filename)
     _save_json_config(cuda_config_data, cuda_filepath)
