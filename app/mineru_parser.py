@@ -38,7 +38,9 @@ def get_soffice_cmd() -> str | None:
 class ParseResult:
     markdown: str
     middle_json: str
-    images: dict[str, str] = field(default_factory=dict)  # image name => base64-decoded image data
+    images: dict[str, str] = field(
+        default_factory=dict
+    )  # image name => base64-decoded image data
 
 
 class MinerUParser:
@@ -47,6 +49,7 @@ class MinerUParser:
             return os.getenv("MINERU_DEVICE_MODE")
         try:
             import torch
+
             if torch.cuda.is_available():
                 return "cuda"
             if torch.mps.is_available():
@@ -122,6 +125,7 @@ class MinerUParser:
             middle_json = None
             if hasattr(pipe_result, "_pipe_res"):
                 adjust_title_level(doc_path, pipe_result._pipe_res)
+                add_merged_text_field(pipe_result._pipe_res)
                 middle_json = json.dumps(pipe_result._pipe_res, ensure_ascii=False)
 
             markdown = pipe_result.get_markdown("images")
@@ -137,13 +141,53 @@ class MinerUParser:
                             name = f"images/{file}"
                             images_dict[name] = base64.b64encode(f.read()).decode()
 
-            return ParseResult(markdown=markdown, middle_json=middle_json, images=images_dict)
+            return ParseResult(
+                markdown=markdown, middle_json=middle_json, images=images_dict
+            )
         except:
             logger.exception("MinerUParser failed")
             raise
         finally:
             if temp_dir_obj is not None:
                 temp_dir_obj.cleanup()
+
+
+def add_merged_text_field(pipe_res: dict):
+    # Lazily import merge_para_with_text here, to avoid initializing
+    # ocr_mkcontent.latex_delimiters_config too early. This is because
+    # it needs to read the configuration file, and here it can be ensured
+    # that the configuration file has been set up.
+    from magic_pdf.dict2md.ocr_mkcontent import merge_para_with_text
+
+    def _set_merged_text_field(block: dict[str, Any]):
+        block["merged_text"] = merge_para_with_text(block)
+
+    simple_block_types = set([
+        BlockType.Text,
+        BlockType.List,
+        BlockType.Index,
+        BlockType.Title,
+        BlockType.InterlineEquation,
+    ])
+
+    for page_info in pipe_res.get("pdf_info", []):
+        paras_of_layout: list[dict[str, Any]] = page_info.get("para_blocks")
+        if not paras_of_layout:
+            continue
+        for para_block in paras_of_layout:
+            para_type = para_block["type"]
+            if para_type in simple_block_types:
+                _set_merged_text_field(para_block)
+            elif para_type == BlockType.Image:
+                handle_block_types = [BlockType.ImageCaption, BlockType.ImageFootnote]
+                for block in para_block["blocks"]:
+                    if block["type"] in handle_block_types:
+                        _set_merged_text_field(block)
+            elif para_type == BlockType.Table:
+                handle_block_types = [BlockType.TableCaption, BlockType.TableFootnote]
+                for block in para_block["blocks"]:
+                    if block["type"] in handle_block_types:
+                        _set_merged_text_field(block)
 
 
 def adjust_title_level(pdf_file: Path | None, pipe_res: dict):
@@ -162,7 +206,9 @@ def adjust_title_level(pdf_file: Path | None, pipe_res: dict):
                 continue
             has_level = para_block.get("level", None)
             if has_level is not None:
-                logger.info("MinerU has already set a title level; skipping adjustment.")
+                logger.info(
+                    "MinerU has already set a title level; skipping adjustment."
+                )
                 return
 
             raw_text_map = {}
@@ -259,7 +305,9 @@ def collect_all_text_blocks(pdf_path: Path) -> dict[int, list[tuple[str, float]]
 
                     ret[page_num] = texts
                 except Exception:
-                    logger.exception(f"collect_all_text_blocks error processing page {page_num + 1}")
+                    logger.exception(
+                        f"collect_all_text_blocks error processing page {page_num + 1}"
+                    )
 
             return ret
     except Exception:
