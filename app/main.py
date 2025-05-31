@@ -11,7 +11,7 @@ from fastapi import (  # Removed BackgroundTasks, Added File, UploadFile, Form; 
     HTTPException,
     UploadFile,
 )
-from pydantic import BaseModel, field_serializer
+from pydantic import BaseModel
 from ray import serve
 
 from .mineru_parser import SUPPORTED_EXTENSIONS

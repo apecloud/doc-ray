@@ -1,0 +1,71 @@
+ARG IMAGE_TAG=latest
+ARG BASE_IMAGE=apecloud/doc-ray:base-${IMAGE_TAG}
+ARG MODELS_IMAGE=apecloud/doc-ray:models-${IMAGE_TAG}
+ARG VENV_IMAGE=apecloud/doc-ray:venv-${IMAGE_TAG}
+ARG FINAL_BASE=base
+
+FROM ${MODELS_IMAGE} AS models
+FROM ${VENV_IMAGE} AS venv
+
+FROM ${BASE_IMAGE} AS base
+
+# Copy the Python virtual environment from the 'venv' stage.
+COPY --from=venv /venv /venv
+
+# Activate the virtual environment by setting PATH and VIRTUAL_ENV.
+# This ensures that subsequent commands use the Python interpreter and packages from this venv.
+ENV VIRTUAL_ENV=/venv
+ENV PATH="/venv/bin:$PATH"
+
+# When KubeRay starts a RayCluster using this image, it executes
+# `bash -lc "ray start ..."` to launch the Ray process.
+# The `-l` flag means `--login`, which resets the PATH environment variable,
+# leading to a "command not found" error for `ray`.
+# Therefore, explicitly activate the virtual environment in `.bashrc` to resolve this issue.
+RUN echo "source /venv/bin/activate" >> ~/.bashrc
+
+FROM base AS base-with-models
+COPY --from=models /models_cache /models_cache
+COPY --from=models /mineru /mineru
+ENV MINERU_CONFIG_JSON=/mineru/magic-pdf.json
+
+FROM ${FINAL_BASE} AS final
+
+WORKDIR /app
+
+# Copy the rest of the application code
+# COPY . .
+# Alternatively, be more specific:
+COPY app ./app
+COPY run.py ./run.py
+COPY serve_config.yaml ./serve_config.yaml
+
+# Expose the port the app runs on (Ray Serve default HTTP port)
+EXPOSE 8639
+# Expose the Ray dashboard port (optional, but useful)
+EXPOSE 8265
+# Expose Ray head port (gRPC)
+# EXPOSE 6379
+# Expose Ray internal gRPC port
+# EXPOSE 10001
+
+
+# Command to run the application
+# Option 1: Using the run.py script (simpler for development consistency)
+# This will start a local Ray instance within the container.
+CMD ["python", "./run.py"]
+
+# Option 2: Using `ray start` and `serve run` (more explicit for production-like setup)
+# This is often preferred for containers as it's more direct.
+# CMD ray start --head --disable-usage-stats --dashboard-host 0.0.0.0 --block && \
+#     serve run serve_config.yaml --host 0.0.0.0 --port 8639
+
+# Note on CMD:
+# The `ray start --head --block` keeps Ray running.
+# `serve run` then deploys the application to this Ray instance.
+# The `&&` chain ensures `serve run` only executes if `ray start` succeeds.
+# `--block` makes `ray start` a foreground process. If it daemonizes, the container might exit.
+# If `ray start` daemonizes by default, you might need a wrapper script or `tail -f /dev/null`
+# to keep the container alive after `serve run` configures the deployment.
+# However, `python run.py` already handles the Ray lifecycle and keeping the process alive.
+# So, for this project, `CMD ["python", "run.py"]` is fine and simpler.

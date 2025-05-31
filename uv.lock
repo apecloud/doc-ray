@@ -46,6 +46,7 @@ dependencies = [
     { name = "propcache" },
     { name = "yarl" },
 ]
+sdist = { url = "https://files.pythonhosted.org/packages/6a/61/d37b33a074ad867d1ecec9f03183e2b9fee067745cae17e73c264f556d57/aiohttp-3.12.0.tar.gz", hash = "sha256:e3f0a2b4d7fb16c0d584d9b8860f1e46d39f7d93372b25a6f80c10015a7acdab", size = 7762804, upload-time = "2025-05-24T22:33:33.318Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c5/6d/687b42743088d86de83653153d4ef2ddf77372ce46b9d404c8340b9fec00/aiohttp-3.12.0-cp310-cp310-macosx_10_9_universal2.whl", hash = "sha256:91fca62b1a454a72c48345ad3af0327c87a7352598049fd9fd02b5c96deca456", size = 690021, upload-time = "2025-05-24T22:30:13.027Z" },
     { url = "https://files.pythonhosted.org/packages/66/6d/19bac9bdbaf0893005d61a25898147c781fa78c337d09d989a5216e6422e/aiohttp-3.12.0-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:4cd2ffa8cefce24305e573780d3d4a1bc8904bb76bc208509108bac04bc85c71", size = 466392, upload-time = "2025-05-24T22:30:15.44Z" },
@@ -668,13 +669,22 @@ dependencies = [
     { name = "ray", extra = ["serve"] },
 ]
 
+[package.optional-dependencies]
+misc = [
+    { name = "huggingface-hub" },
+    { name = "modelscope" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "fastapi" },
+    { name = "huggingface-hub", marker = "extra == 'misc'", specifier = ">=0.32.0" },
     { name = "magic-pdf", extras = ["full"], specifier = ">=1.3.5,<2.0.0" },
+    { name = "modelscope", marker = "extra == 'misc'", specifier = ">=1.26.0" },
     { name = "python-multipart", specifier = ">=0.0.20" },
-    { name = "ray", extras = ["serve"] },
+    { name = "ray", extras = ["serve"], specifier = "==2.46.0" },
 ]
+provides-extras = ["misc"]
 
 [[package]]
 name = "doclayout-yolo"
@@ -1586,6 +1596,20 @@ wheels = [
 ]
 
 [[package]]
+name = "modelscope"
+version = "1.26.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "requests" },
+    { name = "tqdm" },
+    { name = "urllib3" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/48/3c/76d1701761590012b331742d6c67babc3b048df166d5ef99a8c6b0c80c2f/modelscope-1.26.0.tar.gz", hash = "sha256:3178d82ce795ba1a5472eacefda517e1f2162186e4f9f9641cf6587d2c368bc1", size = 4390303, upload-time = "2025-05-14T12:55:09.891Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8e/6e/50fed6b37503accb0199153d3c18884380797b40491b11bd03279cd2d698/modelscope-1.26.0-py3-none-any.whl", hash = "sha256:fdb23191cdf8d5811accefc09ef4594f3b7c5f1d165af9194dc64eba96780c3a", size = 5855598, upload-time = "2025-05-14T12:55:05.055Z" },
+]
+
+[[package]]
 name = "mpmath"
 version = "1.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1882,7 +1906,7 @@ name = "nvidia-cudnn-cu12"
 version = "9.5.1.17"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-cublas-cu12" },
+    { name = "nvidia-cublas-cu12", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/2a/78/4535c9c7f859a64781e43c969a3a7e84c54634e319a996d43ef32ce46f83/nvidia_cudnn_cu12-9.5.1.17-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:30ac3869f6db17d170e0e556dd6cc5eee02647abc31ca856634d5a40f82c15b2", size = 570988386, upload-time = "2024-10-25T19:54:26.39Z" },
@@ -1893,7 +1917,7 @@ name = "nvidia-cufft-cu12"
 version = "11.3.0.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-nvjitlink-cu12" },
+    { name = "nvidia-nvjitlink-cu12", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8f/16/73727675941ab8e6ffd86ca3a4b7b47065edcca7a997920b831f8147c99d/nvidia_cufft_cu12-11.3.0.4-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:ccba62eb9cef5559abd5e0d54ceed2d9934030f51163df018532142a8ec533e5", size = 200221632, upload-time = "2024-11-20T17:41:32.357Z" },
@@ -1922,9 +1946,9 @@ name = "nvidia-cusolver-cu12"
 version = "11.7.1.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-cublas-cu12" },
-    { name = "nvidia-cusparse-cu12" },
-    { name = "nvidia-nvjitlink-cu12" },
+    { name = "nvidia-cublas-cu12", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')" },
+    { name = "nvidia-cusparse-cu12", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')" },
+    { name = "nvidia-nvjitlink-cu12", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f0/6e/c2cf12c9ff8b872e92b4a5740701e51ff17689c4d726fca91875b07f655d/nvidia_cusolver_cu12-11.7.1.2-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:e9e49843a7707e42022babb9bcfa33c29857a93b88020c4e4434656a655b698c", size = 158229790, upload-time = "2024-11-20T17:43:43.211Z" },
@@ -1936,7 +1960,7 @@ name = "nvidia-cusparse-cu12"
 version = "12.5.4.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-nvjitlink-cu12" },
+    { name = "nvidia-nvjitlink-cu12", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/06/1e/b8b7c2f4099a37b96af5c9bb158632ea9e5d9d27d7391d7eb8fc45236674/nvidia_cusparse_cu12-12.5.4.2-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:7556d9eca156e18184b94947ade0fba5bb47d69cec46bf8660fd2c71a4b48b73", size = 216561367, upload-time = "2024-11-20T17:44:54.824Z" },
@@ -3620,7 +3644,7 @@ name = "triton"
 version = "3.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "setuptools" },
+    { name = "setuptools", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/76/04/d54d3a6d077c646624dc9461b0059e23fd5d30e0dbe67471e3654aec81f9/triton-3.3.0-cp310-cp310-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:fad99beafc860501d7fcc1fb7045d9496cbe2c882b1674640304949165a916e7", size = 156441993, upload-time = "2025-04-09T20:27:25.107Z" },
