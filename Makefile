@@ -64,15 +64,11 @@ build:
 	docker build -t $(FULL_IMAGE_NAME):models-$(IMAGE_TAG) \
 		-f build/Dockerfile-models .
 
-	docker build -t $(FULL_IMAGE_NAME):venv-$(IMAGE_TAG) \
-		-f build/Dockerfile-venv .
-
 	docker build -t $(FULL_IMAGE_NAME):base-$(IMAGE_TAG) \
 		-f build/Dockerfile-base .
 
 	docker build -t $(FULL_IMAGE_NAME):$(IMAGE_TAG) \
 		--build-arg BASE_IMAGE=$(FULL_IMAGE_NAME):base-$(IMAGE_TAG) \
-		--build-arg VENV_IMAGE=$(FULL_IMAGE_NAME):venv-$(IMAGE_TAG) \
 		--build-arg MODELS_IMAGE=$(FULL_IMAGE_NAME):models-$(IMAGE_TAG) \
 		--build-arg FINAL_BASE=base-with-models \
 		-f build/Dockerfile .
@@ -89,22 +85,17 @@ build-and-push-multiarch:
 	docker buildx build --platform $(PLATFORMS) -t $(FULL_IMAGE_NAME):models-$(IMAGE_TAG) \
 		--push -f build/Dockerfile-models .
 
-	docker buildx build --platform $(PLATFORMS) -t $(FULL_IMAGE_NAME):venv-$(IMAGE_TAG) \
-		--push -f build/Dockerfile-venv .
-
 	docker buildx build --platform $(PLATFORMS) -t $(FULL_IMAGE_NAME):base-$(IMAGE_TAG) \
 		--push -f build/Dockerfile-base .
 
 	@# The image for KubeRay doesn't contain model files.
 	docker buildx build --platform $(PLATFORMS) -t $(FULL_IMAGE_NAME):kuberay-$(IMAGE_TAG) \
 		--build-arg BASE_IMAGE=$(FULL_IMAGE_NAME):base-$(IMAGE_TAG) \
-		--build-arg VENV_IMAGE=$(FULL_IMAGE_NAME):venv-$(IMAGE_TAG) \
 		--build-arg MODELS_IMAGE=$(FULL_IMAGE_NAME):models-$(IMAGE_TAG) \
 		--push -f build/Dockerfile .
 
 	docker buildx build --platform $(PLATFORMS) -t $(FULL_IMAGE_NAME):$(IMAGE_TAG) \
 		--build-arg BASE_IMAGE=$(FULL_IMAGE_NAME):base-$(IMAGE_TAG) \
-		--build-arg VENV_IMAGE=$(FULL_IMAGE_NAME):venv-$(IMAGE_TAG) \
 		--build-arg MODELS_IMAGE=$(FULL_IMAGE_NAME):models-$(IMAGE_TAG) \
 		--build-arg FINAL_BASE=base-with-models \
 		--push -f build/Dockerfile .

@@ -14,3 +14,30 @@ RUN apt update && \
         ${MINERU_DEPS} ${LIBREOFFICE_DEPS} ${LIBREOFFICE_FONT_DEPS} && \
     apt clean && \
     rm -rf /var/lib/apt/lists/*
+
+# Install uv globally
+# uv will be used in the final stage to install project dependencies.
+RUN pip install --no-cache-dir uv
+
+WORKDIR /app
+
+# Copy the pyproject.toml and uv.lock (if it exists) first
+# This allows Docker to leverage caching for dependencies if they haven't changed
+COPY pyproject.toml ./
+COPY uv.lock ./
+
+# Install dependencies using uv.
+# --no-cache to reduce image size
+RUN uv sync --no-cache --prerelease=allow
+
+# Activate the virtual environment by setting PATH and VIRTUAL_ENV.
+# This ensures that subsequent commands use the Python interpreter and packages from this venv.
+ENV VIRTUAL_ENV=/app/.venv
+ENV PATH="/app/.venv/bin:$PATH"
+
+# When KubeRay starts a RayCluster using this image, it executes
+# `bash -lc "ray start ..."` to launch the Ray process.
+# The `-l` flag means `--login`, which resets the PATH environment variable,
+# leading to a "command not found" error for `ray`.
+# Therefore, explicitly activate the virtual environment in `.bashrc` to resolve this issue.
+RUN echo "source /app/.venv/bin/activate" >> ~/.bashrc

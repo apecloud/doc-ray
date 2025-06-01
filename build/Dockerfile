@@ -1,28 +1,10 @@
 ARG IMAGE_TAG=latest
 ARG BASE_IMAGE=apecloud/doc-ray:base-${IMAGE_TAG}
 ARG MODELS_IMAGE=apecloud/doc-ray:models-${IMAGE_TAG}
-ARG VENV_IMAGE=apecloud/doc-ray:venv-${IMAGE_TAG}
 ARG FINAL_BASE=base
 
 FROM ${MODELS_IMAGE} AS models
-FROM ${VENV_IMAGE} AS venv
-
 FROM ${BASE_IMAGE} AS base
-
-# Copy the Python virtual environment from the 'venv' stage.
-COPY --from=venv /venv /venv
-
-# Activate the virtual environment by setting PATH and VIRTUAL_ENV.
-# This ensures that subsequent commands use the Python interpreter and packages from this venv.
-ENV VIRTUAL_ENV=/venv
-ENV PATH="/venv/bin:$PATH"
-
-# When KubeRay starts a RayCluster using this image, it executes
-# `bash -lc "ray start ..."` to launch the Ray process.
-# The `-l` flag means `--login`, which resets the PATH environment variable,
-# leading to a "command not found" error for `ray`.
-# Therefore, explicitly activate the virtual environment in `.bashrc` to resolve this issue.
-RUN echo "source /venv/bin/activate" >> ~/.bashrc
 
 FROM base AS base-with-models
 COPY --from=models /models_cache /models_cache
