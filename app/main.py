@@ -13,6 +13,7 @@ from fastapi import (  # Removed BackgroundTasks, Added File, UploadFile, Form; 
 )
 from pydantic import BaseModel
 from ray import serve
+from ray.serve.config import AutoscalingConfig
 
 from .mineru_parser import SUPPORTED_EXTENSIONS
 
@@ -305,23 +306,24 @@ def get_ray_actor_options_based_on_gpu_availability(
     This function should be called after ray.init() or when Ray is connected.
     """
     ray_actor_options = {
-        "num_cpus": int(os.getenv("NUM_PARSER_CPUS_PER_REPLICA", "1"))
-    }  # Default CPU request
+        "num_cpus": int(os.getenv("PARSER_NUM_CPUS_PER_REPLICA", "1")),
+        "memory": int(os.getenv("PARSER_MEMORY_PER_REPLICA", str(1*1024*1024*1024))),  # Default 1GB
+    }
 
     # Allow overriding via environment variable for explicit control
-    # DOC_RAY_FORCE_GPU_PER_REPLICA: "0", "0.25", "1"
-    force_gpu_str = os.getenv("DOC_RAY_FORCE_GPU_PER_REPLICA")
+    # PARSER_FORCE_GPU_PER_REPLICA: "0", "0.25", "1"
+    force_gpu_str = os.getenv("PARSER_FORCE_GPU_PER_REPLICA")
     if force_gpu_str is not None:
         try:
             forced_gpus = float(force_gpu_str)
             logger.info(
-                f"DOC_RAY_FORCE_GPU_PER_REPLICA is set to {forced_gpus}. Using this value for num_gpus."
+                f"PARSER_FORCE_GPU_PER_REPLICA is set to {forced_gpus}. Using this value for num_gpus."
             )
             ray_actor_options["num_gpus"] = forced_gpus
             return ray_actor_options
         except ValueError:
             logger.warning(
-                f"Invalid value for DOC_RAY_FORCE_GPU_PER_REPLICA: '{force_gpu_str}'. Ignoring and proceeding with auto-detection."
+                f"Invalid value for PARSER_FORCE_GPU_PER_REPLICA: '{force_gpu_str}'. Ignoring and proceeding with auto-detection."
             )
 
     if not ray.is_initialized():
@@ -424,7 +426,17 @@ if state_manager_actor:  # Ensure StateManager is available
     entrypoint = ServeController.bind(
         state_manager_actor_handle=state_manager_actor,
         parser_deployment_handle=DocumentParser.options(
-            ray_actor_options=_parser_actor_options
+            ray_actor_options=_parser_actor_options,
+            max_ongoing_requests=1,
+            num_replicas=int(
+                os.getenv("PARSER_NUM_REPLICAS", "auto")
+            ),
+            autoscaling_config=AutoscalingConfig(
+                initial_replicas=os.getenv("PARSER_AUTOSCALING_INITIAL_REPLICAS", "1"),
+                min_replicas=os.getenv("PARSER_AUTOSCALING_MIN_REPLICAS", "1"),
+                max_replicas=os.getenv("PARSER_AUTOSCALING_MAX_REPLICAS", "4"),
+                target_ongoing_requests=os.getenv("PARSER_AUTOSCALING_TARGET_ONGOING_REQUESTS", "5"),
+            ),
         ).bind(),  # Bind DocumentParser deployment
     )
     logger.info("ServeController bound with dependencies. Ready for serving.")

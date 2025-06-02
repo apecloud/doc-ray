@@ -14,8 +14,8 @@ logger = logging.getLogger(__name__)
 @serve.deployment(
     name="DocumentParserDeployment",  # Assign a name to the deployment
     num_replicas=int(
-        os.getenv("NUM_PARSER_REPLICAS", "1")
-    ),  # Default to 2 replicas, configurable via env var
+        os.getenv("PARSER_NUM_REPLICAS", "1")
+    ),
     # Example: Define resource requirements for each replica
     # ray_actor_options={"num_cpus": 1, "num_gpus": 0.25 if you need GPUs}
 )
