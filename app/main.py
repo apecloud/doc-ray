@@ -428,14 +428,12 @@ if state_manager_actor:  # Ensure StateManager is available
         parser_deployment_handle=DocumentParser.options(
             ray_actor_options=_parser_actor_options,
             max_ongoing_requests=1,
-            num_replicas=int(
-                os.getenv("PARSER_NUM_REPLICAS", "auto")
-            ),
+            num_replicas=os.getenv("PARSER_NUM_REPLICAS", "auto"),
             autoscaling_config=AutoscalingConfig(
-                initial_replicas=os.getenv("PARSER_AUTOSCALING_INITIAL_REPLICAS", "1"),
-                min_replicas=os.getenv("PARSER_AUTOSCALING_MIN_REPLICAS", "1"),
-                max_replicas=os.getenv("PARSER_AUTOSCALING_MAX_REPLICAS", "4"),
-                target_ongoing_requests=os.getenv("PARSER_AUTOSCALING_TARGET_ONGOING_REQUESTS", "5"),
+                initial_replicas=int(os.getenv("PARSER_AUTOSCALING_INITIAL_REPLICAS", "1")),
+                min_replicas=int(os.getenv("PARSER_AUTOSCALING_MIN_REPLICAS", "1")),
+                max_replicas=int(os.getenv("PARSER_AUTOSCALING_MAX_REPLICAS", "4")),
+                target_ongoing_requests=int(os.getenv("PARSER_AUTOSCALING_TARGET_ONGOING_REQUESTS", "5")),
             ),
         ).bind(),  # Bind DocumentParser deployment
     )
