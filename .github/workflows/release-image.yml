@@ -65,7 +65,9 @@ jobs:
       DOCKERFILE_PATH: "./build/Dockerfile"
       REMOVE_PREFIX: false
       APECD_REF: "v0.1.93"
-      BUILDX_ARGS: "IMAGE_TAG=latest"
+      BUILDX_ARGS: |
+        IMAGE_TAG=${{ needs.image-tag.outputs.tag-name }}
+        FINAL_BASE=base-with-models
     secrets: inherit
 
   release-result:
