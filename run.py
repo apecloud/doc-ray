@@ -93,8 +93,8 @@ def main():
             # This catch is for errors during the serve.status() or serve.delete() calls
             logger.error(f"Error during Ray Serve cleanup for application '{app_name_to_delete}': {e}", exc_info=True)
 
-        # Explicitly kill the DocRayJobStateManagerActor if it exists
         if ray.is_initialized(): # Ensure Ray is still initialized before trying to get actor
+            # Explicitly kill the DocRayJobStateManagerActor if it exists
             try:
                 state_manager_actor_to_kill = ray.get_actor("DocRayJobStateManagerActor")
                 ray.kill(state_manager_actor_to_kill)
@@ -103,6 +103,16 @@ def main():
                 logger.info("DocRayJobStateManagerActor not found during shutdown, no need to kill.")
             except Exception as e:
                 logger.error(f"Error killing DocRayJobStateManagerActor during shutdown: {e}", exc_info=True)
+
+            # Explicitly kill the BackgroundParsingActor if it exists
+            try:
+                background_parser_actor_to_kill = ray.get_actor("BackgroundParsingActor")
+                ray.kill(background_parser_actor_to_kill)
+                logger.info("BackgroundParsingActor killed successfully during shutdown.")
+            except ValueError:
+                logger.info("BackgroundParsingActor not found during shutdown, no need to kill.")
+            except Exception as e:
+                logger.error(f"Error killing BackgroundParsingActor during shutdown: {e}", exc_info=True)
 
         if ray_initialized_by_script and ray.is_initialized():
             logger.info("Ray was initialized by this script. Shutting down Ray.")

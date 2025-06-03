@@ -1,7 +1,8 @@
 import asyncio  # Required for background task execution
 import logging
 import os  # Added for os.getenv
-from typing import Any, Dict, Optional, Union
+import time
+from typing import Any, Dict, Optional
 
 import ray
 import ray.serve.handle
@@ -11,10 +12,11 @@ from fastapi import (  # Removed BackgroundTasks, Added File, UploadFile, Form; 
     HTTPException,
     UploadFile,
 )
-from pydantic import BaseModel, field_serializer
+from pydantic import BaseModel
 from ray import serve
+from ray.serve.config import AutoscalingConfig
 
-from .mineru_parser import SUPPORTED_EXTENSIONS
+from .mineru_parser import SUPPORTED_EXTENSIONS, MinerUParser
 
 # Import project components
 from .parser import DocumentParser
@@ -72,75 +74,59 @@ class DeleteResponse(BaseModel):
     message: str
 
 
-# --- Standalone Ray Remote Function for Parsing ---
-async def _execute_parsing_task_async_logic(  # Renamed to indicate it's the async core
-    job_id: str,
-    document_object_ref: Union[ray.ObjectRef, bytes],
-    filename: str,
-    parser_type: Optional[str],
-    parser_params: Optional[Dict[str, Any]],
-    file_content_type: Optional[str],
-    parser_deployment_handle: ray.serve.handle.DeploymentHandle,
-    state_manager_actor_handle: JobStateManager,
-):
+@ray.remote(name="BackgroundParsingActor", max_concurrency=16)
+class BackgroundParsingActor:
     """
-    Core asynchronous logic for parsing.
+    This actor handles the document parsing in the background.
+    It's a singleton actor with limited concurrency.
     """
-    logger.info(f"Async parsing logic started for job_id: {job_id}, file: {filename}")
-    try:
-        result = await parser_deployment_handle.parse.remote(
-            document_object_ref,
-            filename,
-            job_id,
-            parser_type,
-            parser_params,
-        )
-        await state_manager_actor_handle.store_job_result.remote(job_id, result)
-        logger.info(f"Parsing successful for job_id: {job_id}. Result stored.")
-    except Exception as e:
-        error_msg = f"Error during remote parsing for job_id {job_id} (file: {filename}): {str(e)}"
-        logger.error(error_msg, exc_info=True)
-        await state_manager_actor_handle.update_job_status.remote(
-            job_id, "failed", error_message=error_msg
-        )
 
+    async def parse_document(
+        self,
+        job_id: str,
+        document_content_bytes: bytes,
+        filename: str,
+        parser_type: Optional[str],
+        parser_params: Optional[Dict[str, Any]],
+        file_content_type: Optional[str],
+        parser_deployment_handle: ray.serve.handle.DeploymentHandle,
+        state_manager_actor_handle: JobStateManager,
+    ):
+        # Logger setup inside the actor method if not configured globally for actors
+        # For simplicity, assuming ray.logger is available and configured
+        actor_logger = ray.logger  # or logging.getLogger(__name__) if preferred
 
-@ray.remote
-def execute_parsing_task_remotely(
-    job_id: str,
-    document_object_ref: Union[ray.ObjectRef, bytes],
-    filename: str,
-    parser_type: Optional[str],
-    parser_params: Optional[Dict[str, Any]],
-    file_content_type: Optional[str],
-    parser_deployment_handle: ray.serve.handle.DeploymentHandle,
-    state_manager_actor_handle: JobStateManager,
-):
-    """
-    This synchronous Ray remote function wraps the asynchronous parsing logic.
-    It's called by the ServeController.
-    """
-    logger.info(
-        f"Remote parsing task (sync wrapper) started for job_id: {job_id}, file: {filename}"
-    )
-    # Get or create an event loop to run the async logic
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    loop.run_until_complete(
-        _execute_parsing_task_async_logic(
-            job_id,
-            document_object_ref,
-            filename,
-            parser_type,
-            parser_params,
-            file_content_type,
-            parser_deployment_handle,
-            state_manager_actor_handle,
-        )
-    )
+        try:
+            actor_logger.info(
+                f"BackgroundParsingActor: Start parsing for job_id: {job_id}, file: {filename}"
+            )
+            start_time = time.time()
+            loop = asyncio.get_running_loop()
+            # MinerUParser modifies some global state within the magic-pdf library,
+            # so it needs to be placed in a named actor to isolate it from other processes.
+            mineru_parser = MinerUParser(parser_deployment_handle) # Renamed for clarity
+            # Run the potentially blocking parse method in a thread pool executor
+            parse_result_obj = await loop.run_in_executor(
+                None,  # Use default ThreadPoolExecutor
+                mineru_parser.parse,
+                document_content_bytes,
+                filename,
+            )
+            end_time = time.time()
+            parsing_duration = end_time - start_time
+            actor_logger.info(
+                f"BackgroundParsingActor: Parsing for job_id: {job_id} (file: {filename}) took {parsing_duration:.2f} seconds."
+            )
+            await state_manager_actor_handle.store_job_result.remote(job_id, parse_result_obj)
+            actor_logger.info(
+                f"BackgroundParsingActor: Parsing successful for job_id: {job_id}."
+            )
+        except Exception as e:
+            error_msg = f"BackgroundParsingActor: Error during parsing for job_id {job_id} (file: {filename}): {str(e)}"
+            actor_logger.error(error_msg, exc_info=True)
+            await state_manager_actor_handle.update_job_status.remote(
+                job_id, "failed", error_message=error_msg
+            )
 
 
 # --- Ray Serve Deployment ---
@@ -153,14 +139,18 @@ class ServeController:
     def __init__(
         self,
         state_manager_actor_handle: JobStateManager,
-        parser_deployment_handle: serve.handle.DeploymentHandle,  # Changed to DeploymentHandle
+        background_parser_actor_handle: "BackgroundParsingActor",
+        parser_deployment_handle: ray.serve.handle.DeploymentHandle,
     ):
         self._state_manager: JobStateManager = state_manager_actor_handle
-        self._parser_deployment_handle: serve.handle.DeploymentHandle = (
-            parser_deployment_handle  # Store the deployment handle
+        self._background_parser: BackgroundParsingActor = background_parser_actor_handle
+        self._parser_deployment_handle: ray.serve.handle.DeploymentHandle = (
+            parser_deployment_handle
         )
+
         logger.info(
-            "ServeController initialized with StateManager and DocumentParserDeployment handle."
+            "ServeController initialized with StateManager, BackgroundParsingActor, "
+            "and DocumentParserDeployment handle."
         )
 
     @app.post("/submit", response_model=SubmitResponse, status_code=202)
@@ -190,12 +180,6 @@ class ServeController:
         document_content_bytes = await file.read()
         await file.close()  # Important to close the file after reading
 
-        # Store the document content in Ray object store
-        document_object_ref = ray.put(document_content_bytes)
-        logger.info(
-            f"Document content for '{file.filename}' stored in Ray object store: {document_object_ref.hex()}"
-        )
-
         job_initial_data = {
             "filename": file.filename,
             "content_type": file.content_type,
@@ -210,10 +194,10 @@ class ServeController:
         # This call is non-blocking and returns an ObjectRef immediately (which we ignore here).
         # The task will be scheduled and executed by Ray on this actor.
 
-        # Launch the standalone Ray remote function for parsing
-        execute_parsing_task_remotely.remote(
+        # Call the method on the BackgroundParsingActor
+        self._background_parser.parse_document.remote(
             job_id,
-            document_object_ref,
+            document_content_bytes,
             file.filename,
             None,
             None,
@@ -305,23 +289,26 @@ def get_ray_actor_options_based_on_gpu_availability(
     This function should be called after ray.init() or when Ray is connected.
     """
     ray_actor_options = {
-        "num_cpus": int(os.getenv("NUM_PARSER_CPUS_PER_REPLICA", "1"))
-    }  # Default CPU request
+        "num_cpus": int(os.getenv("PARSER_NUM_CPUS_PER_REPLICA", "1")),
+        "memory": int(
+            os.getenv("PARSER_MEMORY_PER_REPLICA", str(1 * 1024 * 1024 * 1024))
+        ),  # Default 1GB
+    }
 
     # Allow overriding via environment variable for explicit control
-    # DOC_RAY_FORCE_GPU_PER_REPLICA: "0", "0.25", "1"
-    force_gpu_str = os.getenv("DOC_RAY_FORCE_GPU_PER_REPLICA")
+    # PARSER_FORCE_GPU_PER_REPLICA: "0", "0.25", "1"
+    force_gpu_str = os.getenv("PARSER_FORCE_GPU_PER_REPLICA")
     if force_gpu_str is not None:
         try:
             forced_gpus = float(force_gpu_str)
             logger.info(
-                f"DOC_RAY_FORCE_GPU_PER_REPLICA is set to {forced_gpus}. Using this value for num_gpus."
+                f"PARSER_FORCE_GPU_PER_REPLICA is set to {forced_gpus}. Using this value for num_gpus."
             )
             ray_actor_options["num_gpus"] = forced_gpus
             return ray_actor_options
         except ValueError:
             logger.warning(
-                f"Invalid value for DOC_RAY_FORCE_GPU_PER_REPLICA: '{force_gpu_str}'. Ignoring and proceeding with auto-detection."
+                f"Invalid value for PARSER_FORCE_GPU_PER_REPLICA: '{force_gpu_str}'. Ignoring and proceeding with auto-detection."
             )
 
     if not ray.is_initialized():
@@ -409,6 +396,18 @@ except Exception as e:
     # For now, we log and proceed, but the service will likely fail.
     state_manager_actor = None  # This will cause issues later if not handled
 
+# Get or create the BackgroundParsingActor handle
+try:
+    background_parser_actor = BackgroundParsingActor.options(
+        name="BackgroundParsingActor", get_if_exists=True, lifetime="detached"
+    ).remote()
+    logger.info("BackgroundParsingActor handle obtained/created.")
+except Exception as e:
+    logger.error(
+        f"Failed to get or create BackgroundParsingActor: {e}. This is critical."
+    )
+    background_parser_actor = None
+
 # 3. DocumentParser is now a Serve Deployment. It will be bound into the application.
 #    The handle will be created by `DocumentParser.bind()` below.
 
@@ -417,20 +416,34 @@ except Exception as e:
 # (e.g., `doc_parser_service.app.main:app_builder` if we named this `app_builder`)
 # Or, if the config points to `doc_parser_service.app.main:controller_app`, it will be this.
 # For `serve.run(ServeController.bind(...))` in a Python script, this is how you'd do it.
-if state_manager_actor:  # Ensure StateManager is available
+if state_manager_actor and background_parser_actor:  # Ensure both actors are available
     # DocumentParser is imported from .parser
     # Its .bind() method creates a DeploymentHandle that ServeController will use.
     # Ray Serve will manage the lifecycle of DocumentParserDeployment.
     entrypoint = ServeController.bind(
         state_manager_actor_handle=state_manager_actor,
+        background_parser_actor_handle=background_parser_actor,
         parser_deployment_handle=DocumentParser.options(
-            ray_actor_options=_parser_actor_options
+            ray_actor_options=_parser_actor_options,
+            max_ongoing_requests=1,
+            num_replicas=os.getenv("PARSER_NUM_REPLICAS", "auto"),
+            autoscaling_config=AutoscalingConfig(
+                initial_replicas=int(
+                    os.getenv("PARSER_AUTOSCALING_INITIAL_REPLICAS", "1")
+                ),
+                min_replicas=int(os.getenv("PARSER_AUTOSCALING_MIN_REPLICAS", "1")),
+                max_replicas=int(os.getenv("PARSER_AUTOSCALING_MAX_REPLICAS", "4")),
+                target_ongoing_requests=int(
+                    os.getenv("PARSER_AUTOSCALING_TARGET_ONGOING_REQUESTS", "5")
+                ),
+            ),
         ).bind(),  # Bind DocumentParser deployment
     )
     logger.info("ServeController bound with dependencies. Ready for serving.")
 else:
     logger.critical(
-        "DocRayJobStateManagerActor handle is not available. Cannot bind ServeController."
+        "One or more critical actors (JobStateManager or BackgroundParsingActor) "
+        "are not available. Cannot bind ServeController."
     )
 
     # Fallback or error handling:
@@ -441,14 +454,14 @@ else:
     def health_check_error():
         return {
             "status": "error",
-            "message": "DocRayJobStateManagerActor could not be initialized.",
+            "message": "Critical actor(s) could not be initialized.",
         }
 
     entrypoint = (
         app  # Serve the basic FastAPI app with an error message on health check
     )
     logger.info(
-        "Serving a fallback FastAPI app due to DocRayJobStateManagerActor initialization failure."
+        "Serving a fallback FastAPI app due to critical actor initialization failure."
     )
 
 # For local testing with `python doc_parser_service/app/main.py` (if you add `if __name__ == "__main__": serve.run(entrypoint)`)

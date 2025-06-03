@@ -20,9 +20,9 @@ This project implements an asynchronous document parsing service using Ray Serve
 
 ## Development Setup
 
-1.  **Clone the repository (if applicable)**:
+1.  **Clone the repository**:
     ```bash
-    # git clone <repository-url>
+    # git clone https://github.com/apecloud/doc-ray
     # cd doc-ray
     ```
 
@@ -34,13 +34,13 @@ This project implements an asynchronous document parsing service using Ray Serve
 
 3.  **Install dependencies using `uv`**:
     ```bash
-    uv sync --prerelease=allow
+    uv sync --prerelease=allow --all-extras
     ```
 
 4.  **Prepare MinerU prerequisites**:
     Run the script to download models required by MinerU and generate the `magic-pdf.json` file.
     ```bash
-    python ./scripts/prepare_for_mineru.py
+    make download-models
     ```
 
 5.  **Run the service locally**:
@@ -69,17 +69,15 @@ This project implements an asynchronous document parsing service using Ray Serve
 
 ### Standalone Mode with Docker
 
-The provided `Dockerfile` packages the application into a container.
-
-1.  **Build the Docker image**:
+1.  **(Optional) Build the Docker image locally**:
 
     ```bash
-    docker build -t doc-ray .
+    make build-standalone
     ```
 
 2.  **Run the Docker container**:
     ```bash
-    docker run -d -p 8639:8639 -p 8265:8265 --gpus=all --name doc-ray doc-ray
+    docker run -d -p 8639:8639 -p 8265:8265 --gpus=all --name doc-ray apecloud/doc-ray:standalone-latest
     ```
     - `-d`: Run in detached mode.
     - `-p 8639:8639`: Maps the container's port 8639 (Ray Serve HTTP) to the host's port 8639.
