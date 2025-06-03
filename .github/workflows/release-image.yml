@@ -1,0 +1,92 @@
+name: Release Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'The tag of image'
+        required: true
+        default: ''
+  release:
+    types:
+      - published
+
+env:
+  RELEASE_VERSION: ${{ github.ref_name }}
+
+
+run-name: Release:${{ inputs.image_tag }} ${{ github.ref_name }}
+
+jobs:
+  image-tag:
+    runs-on: ubuntu-latest
+    outputs:
+      tag-name: ${{ steps.get_tag_name.outputs.tag_name }}
+    steps:
+      - name: Get Tag Name
+        id: get_tag_name
+        run: |
+          TAG_NAME=${{ inputs.image_tag }}
+          if [[ -z "$TAG_NAME" ]]; then
+              TAG_NAME="${{ env.RELEASE_VERSION }}"
+          fi
+          echo tag_name=$TAG_NAME >> $GITHUB_OUTPUT
+
+  release-models-image:
+    needs: [ image-tag ]
+    uses: apecloud/apecloud-cd/.github/workflows/release-image-cache-sync.yml@v0.1.93
+    with:
+      IMG: "apecloud/doc-ray"
+      VERSION: "models-${{ needs.image-tag.outputs.tag-name }}"
+      DOCKERFILE_PATH: "./build/Dockerfile-models"
+      REMOVE_PREFIX: false
+      APECD_REF: "v0.1.93"
+    secrets: inherit
+
+  release-base-image:
+    needs: [ image-tag ]
+    uses: apecloud/apecloud-cd/.github/workflows/release-image-cache-sync.yml@v0.1.93
+    with:
+      IMG: "apecloud/doc-ray"
+      VERSION: "base-${{ needs.image-tag.outputs.tag-name }}"
+      DOCKERFILE_PATH: "./build/Dockerfile-base"
+      REMOVE_PREFIX: false
+      APECD_REF: "v0.1.93"
+    secrets: inherit
+
+  release-image:
+    needs: [ image-tag, release-base-image, release-models-image ]
+    uses: apecloud/apecloud-cd/.github/workflows/release-image-cache-sync.yml@v0.1.93
+    with:
+      IMG: "apecloud/doc-ray"
+      VERSION: "${{ needs.image-tag.outputs.tag-name }}"
+      DOCKERFILE_PATH: "./build/Dockerfile"
+      REMOVE_PREFIX: false
+      APECD_REF: "v0.1.93"
+    secrets: inherit
+
+  release-result:
+    runs-on: ubuntu-latest
+    needs: [ release-image ]
+    if: ${{ always() && github.event.action == 'published' }}
+    outputs:
+      release-result: ${{ steps.get_release_result.outputs.release_result }}
+    steps:
+      - name: get release result
+        id: get_release_result
+        run: |
+          RELEASE_RESULT="error"
+          if [[ "${{ needs.release-image.result }}" == "success" ]]; then
+              RELEASE_RESULT="success"
+          fi
+          echo 'release_result='$RELEASE_RESULT >> $GITHUB_OUTPUT
+
+  send-message:
+    needs: [ image-tag, release-result ]
+    if: ${{ always() && github.event.action == 'published' }}
+    uses: apecloud/apecloud-cd/.github/workflows/feishui-message.yml@v0.1.36
+    with:
+      TYPE: "2"
+      CONTENT: "release image doc-ray:${{ needs.image-tag.outputs.tag-name }} ${{ needs.release-result.outputs.release-result }}"
+      APECD_REF: "v0.1.36"
+    secrets: inherit
