@@ -65,6 +65,7 @@ jobs:
       DOCKERFILE_PATH: "./build/Dockerfile"
       REMOVE_PREFIX: false
       APECD_REF: "v0.1.93"
+      BUILDX_ARGS: "IMAGE_TAG=latest"
     secrets: inherit
 
   release-result:
