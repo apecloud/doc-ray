@@ -88,12 +88,6 @@ build-and-push-multiarch:
 	docker buildx build --platform $(PLATFORMS) -t $(FULL_IMAGE_NAME):base-$(IMAGE_TAG) \
 		--push -f build/Dockerfile-base .
 
-	@# The image for KubeRay doesn't contain model files.
-	docker buildx build --platform $(PLATFORMS) -t $(FULL_IMAGE_NAME):kuberay-$(IMAGE_TAG) \
-		--build-arg BASE_IMAGE=$(FULL_IMAGE_NAME):base-$(IMAGE_TAG) \
-		--build-arg MODELS_IMAGE=$(FULL_IMAGE_NAME):models-$(IMAGE_TAG) \
-		--push -f build/Dockerfile .
-
 	docker buildx build --platform $(PLATFORMS) -t $(FULL_IMAGE_NAME):$(IMAGE_TAG) \
 		--build-arg BASE_IMAGE=$(FULL_IMAGE_NAME):base-$(IMAGE_TAG) \
 		--build-arg MODELS_IMAGE=$(FULL_IMAGE_NAME):models-$(IMAGE_TAG) \
