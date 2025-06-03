@@ -22,8 +22,8 @@ This project implements an asynchronous document parsing service using Ray Serve
 
 1.  **Clone the repository**:
     ```bash
-    # git clone https://github.com/apecloud/doc-ray
-    # cd doc-ray
+    git clone https://github.com/apecloud/doc-ray
+    cd doc-ray
     ```
 
 2.  **Create and activate a virtual environment using `uv`**:
@@ -72,22 +72,25 @@ This project implements an asynchronous document parsing service using Ray Serve
 1.  **(Optional) Build the Docker image locally**:
 
     ```bash
-    make build-standalone
+    make build
     ```
 
 2.  **Run the Docker container**:
     ```bash
-    docker run -d -p 8639:8639 -p 8265:8265 --gpus=all --name doc-ray apecloud/doc-ray:standalone-latest
+    make run-standalone
+
+    # Or run:
+    # docker run -d -p 8639:8639 -p 8265:8265 --gpus=all --name doc-ray apecloud/doc-ray:latest
     ```
     - `-d`: Run in detached mode.
     - `-p 8639:8639`: Maps the container's port 8639 (Ray Serve HTTP) to the host's port 8639.
     - `-p 8265:8265`: Maps the container's port 8265 (Ray Dashboard) to the host's port 8265.
-    - `--gpus=all`: Enables GPU support if available. Omit this flag if not supported (e.g., on Docker Desktop for macOS). **Deployment with GPUs is strongly recommended.**
+    - `--gpus=all`: Enables GPU support. If your Docker environment does not provide GPU access (e.g., Docker Desktop for macOS), omit this flag. **Using GPUs is strongly recommended for optimal performance.**
     - `--name doc-ray`: Assigns a name to the container for easier management.
 
     The service will be accessible at `http://localhost:8639` on your host machine.
 
-### Cluster Mode (To be verified)
+### Cluster Mode (CURRENTLY NOT WORKING, TO BE FIXED)
 
 1.  **Set up a Ray Cluster**:
     Follow the official Ray documentation to set up a multi-node Ray cluster.
