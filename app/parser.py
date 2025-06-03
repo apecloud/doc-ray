@@ -1,18 +1,17 @@
 import asyncio
 import logging
 import os
-from typing import Any, Dict, Optional, Union
 
-import ray
+import numpy as np
 from ray import serve
 
-from app.mineru_parser import MinerUParser, ParseResult
+from app.mineru_parser import MinerUParser
 
 logger = logging.getLogger(__name__)
-
+deployment_name = "DocumentParserDeployment"
 
 @serve.deployment(
-    name="DocumentParserDeployment",  # Assign a name to the deployment
+    name=deployment_name,
     num_replicas=int(
         os.getenv("PARSER_NUM_REPLICAS", "1")
     ),
@@ -21,59 +20,90 @@ logger = logging.getLogger(__name__)
 )
 class DocumentParser:
     def __init__(self):
-        # In a real application, this might load models or other resources.
         logging.basicConfig(level=logging.INFO)
+
+        # Instantiate MinerUParser locally within this replica to do the work.
+        # It doesn't need a parser_deployment_handle because it's the worker, not an orchestrator.
+        self.mineru = MinerUParser()
+
         logger.info("DocumentParser initialized.")
 
-    async def parse(
+    async def batch_image_analyze(
         self,
-        document_object_ref: Union[ray.ObjectRef, bytes],
-        filename: str,
-        job_id: str,
-        parser_type: Optional[str] = None,
-        parser_params: Optional[Dict[str, Any]] = None,
-    ) -> ParseResult:
-        # Retrieve the actual document content from the ObjectRef
+        images_with_extra_info: list[tuple[np.ndarray, bool, str]],
+        ocr: bool,
+        show_log: bool = False,
+        layout_model=None,
+        formula_enable=None,
+        table_enable=None,
+    ) -> list:
+        """
+        Remotely callable method to process a batch of images.
+        This method will be executed by a DocumentParser replica.
+        """
+        replica_context = serve.get_replica_context()
         logger.info(
-            f"Job ID {job_id}: Received document_object_ref of type: {type(document_object_ref)}"
+            f"Replica {replica_context.replica_id} received batch_image_analyze "
+            f"request with {len(images_with_extra_info)} images."
         )
-        if isinstance(document_object_ref, ray.ObjectRef):
-            logger.info(f"Job ID {job_id}: Resolving ObjectRef...")
-            document_content_bytes: bytes = await document_object_ref
-        elif isinstance(document_object_ref, bytes):
-            logger.info(f"Job ID {job_id}: Received bytes directly.")
-            document_content_bytes: bytes = document_object_ref
-        else:
-            # This case should ideally not happen if the calling chain is correct
-            logger.error(
-                f"Job ID {job_id}: Unexpected type for document_object_ref: {type(document_object_ref)}"
-            )
-            raise TypeError(
-                f"Expected ray.ObjectRef or bytes, got {type(document_object_ref)}"
-            )
 
-        logger.info(f"Starting parsing for job_id: {job_id} with file {filename}")
-
-        # Run the potentially blocking MinerUParser().parse() in a separate thread
         loop = asyncio.get_running_loop()
         try:
-            mineru = MinerUParser()
-
-            # The result from mineru.parse is a ParseResult object.
-            # We need to decide what string representation to return.
-            # For this example, let's assume we want to return the markdown content.
-            parse_result_obj = await loop.run_in_executor(
+            # MinerUParser.batch_image_analyze calls may_batch_image_analyze, which is CPU/GPU intensive.
+            # Run it in an executor to avoid blocking the replica's asyncio event loop.
+            result_list = await loop.run_in_executor(
                 None,  # Use default ThreadPoolExecutor
-                mineru.parse,  # The blocking function
-                document_content_bytes,
-                filename,
+                self.mineru.batch_image_analyze, # Call the method on the instance
+                images_with_extra_info,
+                ocr,
+                show_log,
+                layout_model,
+                formula_enable,
+                table_enable
             )
-            logger.info(f"Completed parsing for job_id: {job_id}")
-            return parse_result_obj
+            logger.info(f"Replica {replica_context.replica_id} completed batch_image_analyze for {len(images_with_extra_info)} images.")
+            return result_list
         except Exception as e:
             logger.error(
-                f"Job ID {job_id}: Error during MinerUParser execution: {e}",
+                f"Replica {replica_context.replica_id}: Error during batch_image_analyze: {e}",
                 exc_info=True,
             )
-            # Re-raise or return an error message string
+            raise
+
+    async def ocr(
+        self,
+        img: np.ndarray | list | str | bytes,
+        det: bool = True,
+        rec: bool = True,
+        mfd_res: list | None = None,
+        tqdm_enable: bool = False,
+    ) -> list:
+        """
+        Remotely callable method to perform OCR on a batch of images.
+        This method will be executed by a DocumentParser replica.
+        """
+        replica_context = serve.get_replica_context()
+        logger.info(
+            f"Replica {replica_context.replica_id} received ocr request."
+        )
+
+        loop = asyncio.get_running_loop()
+        try:
+            # MinerUParser.ocr can handle a list of images.
+            ocr_results = await loop.run_in_executor(
+                None,  # Use default ThreadPoolExecutor
+                self.mineru.ocr, # Call the method on the instance
+                img,
+                det,
+                rec,
+                mfd_res,
+                tqdm_enable,
+            )
+            logger.info(f"Replica {replica_context.replica_id} completed ocr.")
+            return ocr_results # This should be a list of OCR results, one for each image in images_batch
+        except Exception as e:
+            logger.error(
+                f"Replica {replica_context.replica_id}: Error during ocr: {e}",
+                exc_info=True,
+            )
             raise
