@@ -41,6 +41,7 @@ jobs:
       DOCKERFILE_PATH: "./build/Dockerfile-models"
       REMOVE_PREFIX: false
       APECD_REF: "v0.1.93"
+      SYNC_ENABLE: false
     secrets: inherit
 
   release-base-image:
@@ -52,6 +53,7 @@ jobs:
       DOCKERFILE_PATH: "./build/Dockerfile-base"
       REMOVE_PREFIX: false
       APECD_REF: "v0.1.93"
+      SYNC_ENABLE: false
     secrets: inherit
 
   release-image:
