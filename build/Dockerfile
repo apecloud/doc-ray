@@ -1,7 +1,7 @@
 ARG IMAGE_TAG=latest
 ARG BASE_IMAGE=apecloud/doc-ray:base-${IMAGE_TAG}
 ARG MODELS_IMAGE=apecloud/doc-ray:models-${IMAGE_TAG}
-ARG FINAL_BASE=base
+ARG FINAL_BASE=base-with-models
 
 FROM ${MODELS_IMAGE} AS models
 FROM ${BASE_IMAGE} AS base
