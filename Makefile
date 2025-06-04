@@ -20,12 +20,16 @@ FULL_IMAGE_NAME = $(REGISTRY)$(IMAGE_NAME)
 PYTHON = python3
 
 # Whether to use --gpus=all flag. Set to "false" to disable.
-# Default to true, but override to false if on macOS unless explicitly set by user.
-USE_GPUS ?= true
+# Default to false on macOS, true otherwise, unless explicitly set by user.
 ifeq ($(shell uname -s),Darwin)
     # If on macOS, default to false unless USE_GPUS was already set on command line
-    USE_GPUS = false
+    # On macOS, default to false
+    USE_GPUS ?= false
+else
+    # On non-macOS, default to true
+    USE_GPUS ?= true
 endif
+
 
 # ==============================================================================
 # Helper Targets
@@ -114,30 +118,33 @@ run-standalone:
 	@echo ">>> Starting container '$(CONTAINER_NAME)'..."
 	@if [ "$(USE_GPUS)" = "true" ]; then \
 		echo ">>> Attempting to start container with GPU support"; \
-		docker run -d \
+		echo ">>> If the container fails to start, especially with GPU-related errors,"; \
+		echo ">>> try running: make run-standalone USE_GPUS=false"; \
+		cmd="docker run -d \
 			-p 8639:8639 \
 			-p 8265:8265 \
 			--gpus=all \
 			--name $(CONTAINER_NAME) \
 			-e STANDALONE_MODE=true \
 			$(EXTRA_ARGS) \
-			$(FULL_IMAGE_NAME):$(IMAGE_TAG); \
+			$(FULL_IMAGE_NAME):$(IMAGE_TAG)"; \
+		echo $$cmd; \
+		$$cmd; \
 	else \
-		docker run -d \
+		cmd="docker run -d \
 			-p 8639:8639 \
 			-p 8265:8265 \
 			--name $(CONTAINER_NAME) \
 			-e STANDALONE_MODE=true \
 			$(EXTRA_ARGS) \
-			$(FULL_IMAGE_NAME):$(IMAGE_TAG); \
+			$(FULL_IMAGE_NAME):$(IMAGE_TAG)"; \
+		echo $$cmd; \
+		$$cmd; \
 	fi
 
 	@echo ">>> Container $(CONTAINER_NAME) started."
 	@echo ">>> Ray Serve should be accessible on http://localhost:8639"
 	@echo ">>> Ray Dashboard should be accessible on http://localhost:8265"
-	@echo ">>> If the container fails to start, especially with GPU-related errors,"
-	@echo ">>> try running: make run-standalone USE_GPUS=false"
-
 
 .PHONY: stop-standalone
 stop-standalone:
