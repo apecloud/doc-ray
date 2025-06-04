@@ -35,19 +35,10 @@ EXPOSE 8265
 # Command to run the application
 # Option 1: Using the run.py script (simpler for development consistency)
 # This will start a local Ray instance within the container.
-CMD ["python", "./run.py"]
+# CMD ["python", "./run.py"]
 
 # Option 2: Using `ray start` and `serve run` (more explicit for production-like setup)
 # This is often preferred for containers as it's more direct.
-# CMD ray start --head --disable-usage-stats --dashboard-host 0.0.0.0 --block && \
-#     serve run serve_config.yaml --host 0.0.0.0 --port 8639
-
-# Note on CMD:
-# The `ray start --head --block` keeps Ray running.
-# `serve run` then deploys the application to this Ray instance.
-# The `&&` chain ensures `serve run` only executes if `ray start` succeeds.
-# `--block` makes `ray start` a foreground process. If it daemonizes, the container might exit.
-# If `ray start` daemonizes by default, you might need a wrapper script or `tail -f /dev/null`
-# to keep the container alive after `serve run` configures the deployment.
-# However, `python run.py` already handles the Ray lifecycle and keeping the process alive.
-# So, for this project, `CMD ["python", "run.py"]` is fine and simpler.
+CMD ["bash", "-c", \
+     "ray start --head --disable-usage-stats --dashboard-host 0.0.0.0 && \
+      serve run serve_config.yaml"]
