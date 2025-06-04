@@ -19,6 +19,14 @@ FULL_IMAGE_NAME = $(REGISTRY)$(IMAGE_NAME)
 # Python interpreter for running scripts
 PYTHON = python3
 
+# Whether to use --gpus=all flag. Set to "false" to disable.
+# Default to true, but override to false if on macOS unless explicitly set by user.
+USE_GPUS ?= true
+ifeq ($(shell uname -s),Darwin)
+    # If on macOS, default to false unless USE_GPUS was already set on command line
+    USE_GPUS = false
+endif
+
 # ==============================================================================
 # Helper Targets
 # ==============================================================================
@@ -45,6 +53,7 @@ help:
 	@echo "  REGISTRY       (default: none)                - Docker registry prefix (e.g., 'your.registry.com/')."
 	@echo "  PLATFORMS      (default: $(PLATFORMS)) - Comma-separated platforms for multi-arch builds."
 	@echo "  CONTAINER_NAME (default: $(CONTAINER_NAME))   - Name for the standalone Docker container."
+	@echo "  USE_GPUS       (default: $(USE_GPUS))         - Set to 'false' to disable '--gpus=all' for 'run-standalone' on non-macOS systems."
 
 # ==============================================================================
 # Development Tasks
@@ -103,22 +112,20 @@ run-standalone:
 	-docker stop $(CONTAINER_NAME) > /dev/null 2>&1 || true
 	-docker rm $(CONTAINER_NAME) > /dev/null 2>&1 || true
 	@echo ">>> Starting container '$(CONTAINER_NAME)'..."
-	@# Check if the current OS is macOS (Darwin)
-	@if [ "$$(uname -s)" = "Darwin" ]; then \
-		echo ">>> Detected macOS, running without --gpus=all"; \
+	@if [ "$(USE_GPUS)" = "true" ]; then \
+		echo ">>> Attempting to start container with GPU support"; \
 		docker run -d \
 			-p 8639:8639 \
 			-p 8265:8265 \
+			--gpus=all \
 			--name $(CONTAINER_NAME) \
 			-e STANDALONE_MODE=true \
 			$(EXTRA_ARGS) \
 			$(FULL_IMAGE_NAME):$(IMAGE_TAG); \
 	else \
-		echo ">>> Detected non-macOS, running with --gpus=all"; \
 		docker run -d \
 			-p 8639:8639 \
 			-p 8265:8265 \
-			--gpus=all \
 			--name $(CONTAINER_NAME) \
 			-e STANDALONE_MODE=true \
 			$(EXTRA_ARGS) \
@@ -128,6 +135,9 @@ run-standalone:
 	@echo ">>> Container $(CONTAINER_NAME) started."
 	@echo ">>> Ray Serve should be accessible on http://localhost:8639"
 	@echo ">>> Ray Dashboard should be accessible on http://localhost:8265"
+	@echo ">>> If the container fails to start, especially with GPU-related errors,"
+	@echo ">>> try running: make run-standalone USE_GPUS=false"
+
 
 .PHONY: stop-standalone
 stop-standalone:
