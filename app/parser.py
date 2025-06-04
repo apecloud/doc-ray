@@ -5,16 +5,15 @@ import os
 import numpy as np
 from ray import serve
 
-from app.mineru_parser import MinerUParser
+from .mineru_parser import MinerUParser, ParseResult
 
 logger = logging.getLogger(__name__)
 deployment_name = "DocumentParserDeployment"
 
+
 @serve.deployment(
     name=deployment_name,
-    num_replicas=int(
-        os.getenv("PARSER_NUM_REPLICAS", "1")
-    ),
+    num_replicas=int(os.getenv("PARSER_NUM_REPLICAS", "1")),
     # Example: Define resource requirements for each replica
     # ray_actor_options={"num_cpus": 1, "num_gpus": 0.25 if you need GPUs}
 )
@@ -27,6 +26,27 @@ class DocumentParser:
         self.mineru = MinerUParser()
 
         logger.info("DocumentParser initialized.")
+
+    async def parse(self, data: bytes, filename: str) -> ParseResult:
+        replica_context = serve.get_replica_context()
+        logger.info(f"Replica {replica_context.replica_id} received parse request.")
+
+        loop = asyncio.get_running_loop()
+        try:
+            result = await loop.run_in_executor(
+                None,  # Use default ThreadPoolExecutor
+                self.mineru.parse,  # Call the method on the instance
+                data,
+                filename,
+            )
+            logger.info(f"Replica {replica_context.replica_id} completed parse.")
+            return result
+        except Exception as e:
+            logger.error(
+                f"Replica {replica_context.replica_id}: Error during parse: {e}",
+                exc_info=True,
+            )
+            raise
 
     async def batch_image_analyze(
         self,
@@ -53,15 +73,17 @@ class DocumentParser:
             # Run it in an executor to avoid blocking the replica's asyncio event loop.
             result_list = await loop.run_in_executor(
                 None,  # Use default ThreadPoolExecutor
-                self.mineru.batch_image_analyze, # Call the method on the instance
+                self.mineru.batch_image_analyze,  # Call the method on the instance
                 images_with_extra_info,
                 ocr,
                 show_log,
                 layout_model,
                 formula_enable,
-                table_enable
+                table_enable,
             )
-            logger.info(f"Replica {replica_context.replica_id} completed batch_image_analyze for {len(images_with_extra_info)} images.")
+            logger.info(
+                f"Replica {replica_context.replica_id} completed batch_image_analyze for {len(images_with_extra_info)} images."
+            )
             return result_list
         except Exception as e:
             logger.error(
@@ -83,16 +105,14 @@ class DocumentParser:
         This method will be executed by a DocumentParser replica.
         """
         replica_context = serve.get_replica_context()
-        logger.info(
-            f"Replica {replica_context.replica_id} received ocr request."
-        )
+        logger.info(f"Replica {replica_context.replica_id} received ocr request.")
 
         loop = asyncio.get_running_loop()
         try:
             # MinerUParser.ocr can handle a list of images.
             ocr_results = await loop.run_in_executor(
                 None,  # Use default ThreadPoolExecutor
-                self.mineru.ocr, # Call the method on the instance
+                self.mineru.ocr,  # Call the method on the instance
                 img,
                 det,
                 rec,
@@ -100,7 +120,7 @@ class DocumentParser:
                 tqdm_enable,
             )
             logger.info(f"Replica {replica_context.replica_id} completed ocr.")
-            return ocr_results # This should be a list of OCR results, one for each image in images_batch
+            return ocr_results  # This should be a list of OCR results, one for each image in images_batch
         except Exception as e:
             logger.error(
                 f"Replica {replica_context.replica_id}: Error during ocr: {e}",
