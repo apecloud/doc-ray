@@ -25,6 +25,18 @@ class DocumentParser:
         # It doesn't need a parser_deployment_handle because it's the worker, not an orchestrator.
         self.mineru = MinerUParser()
 
+        import torch
+
+        logger.info(f"os.cpu_count(): {os.cpu_count()}")
+        logger.info(
+            f"PyTorch threads: {torch.get_num_threads()}, interop threads: {torch.get_num_interop_threads()}"
+        )
+        logger.info(
+            f"PyTorch CUDA available: {torch.cuda.is_available()}, device count: {torch.cuda.device_count()}"
+        )
+        logger.info(
+            f"PyTorch MPS available: {torch.mps.is_available()}, device count: {torch.mps.device_count()}"
+        )
         logger.info("DocumentParser initialized.")
 
     async def parse(self, data: bytes, filename: str) -> ParseResult:
