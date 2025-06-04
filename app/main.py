@@ -363,8 +363,7 @@ def get_ray_actor_options_based_on_gpu_availability(
 
     if is_standalone_mode():
         total_cpus = os.cpu_count()
-        reserved_cpus = 1  # Ray automatically reserve 1 CPU for the ingress actor (maybe)
-        assigned_cpus = total_cpus - reserved_cpus
+        assigned_cpus = total_cpus
         if assigned_cpus > 0:
             ray_actor_options["num_cpus"] = assigned_cpus
             logger.info(f"Assign {assigned_cpus} CPUs for each replica in standalone mode.")
@@ -470,7 +469,11 @@ if state_manager_actor and background_parser_actor:  # Ensure both actors are av
     # DocumentParser is imported from .parser
     # Its .bind() method creates a DeploymentHandle that ServeController will use.
     # Ray Serve will manage the lifecycle of DocumentParserDeployment.
-    entrypoint = ServeController.bind(
+    options = {}
+    if is_standalone_mode():
+        # In standalone mode, we assign all CPU resources of the host to the DocumentParser
+        options["num_cpus"] = 0
+    entrypoint = ServeController.options(ray_actor_options=options).bind(
         state_manager_actor_handle=state_manager_actor,
         background_parser_actor_handle=background_parser_actor,
         parser_deployment_handle=DocumentParser.options(
