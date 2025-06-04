@@ -110,6 +110,7 @@ run-standalone:
 			-p 8639:8639 \
 			-p 8265:8265 \
 			--name $(CONTAINER_NAME) \
+			$(EXTRA_ARGS) \
 			$(FULL_IMAGE_NAME):$(IMAGE_TAG); \
 	else \
 		echo ">>> Detected non-macOS, running with --gpus=all"; \
@@ -118,6 +119,7 @@ run-standalone:
 			-p 8265:8265 \
 			--gpus=all \
 			--name $(CONTAINER_NAME) \
+			$(EXTRA_ARGS) \
 			$(FULL_IMAGE_NAME):$(IMAGE_TAG); \
 	fi
 
