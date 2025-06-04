@@ -1,4 +1,3 @@
-import asyncio  # Required for background task execution
 import logging
 import os  # Added for os.getenv
 import time
@@ -16,7 +15,7 @@ from pydantic import BaseModel
 from ray import serve
 from ray.serve.config import AutoscalingConfig
 
-from .mineru_parser import SUPPORTED_EXTENSIONS, MinerUParser
+from .mineru_parser import SUPPORTED_EXTENSIONS
 
 # Import project components
 from .parser import DocumentParser
@@ -319,6 +318,10 @@ class ServeController:
         )
 
 
+def is_standalone_mode() -> bool:
+    return os.environ.get("STANDALONE_MODE", "false").lower() in ("true", "1", "yes", "on")
+
+
 # Helper function to determine GPU availability for Ray actors
 def get_ray_actor_options_based_on_gpu_availability(
     default_gpus_per_replica: float = 0.0, gpus_if_available: float = 1.0
@@ -328,10 +331,10 @@ def get_ray_actor_options_based_on_gpu_availability(
     This function should be called after ray.init() or when Ray is connected.
     """
     ray_actor_options = {
-        "num_cpus": int(os.getenv("PARSER_NUM_CPUS_PER_REPLICA", "1")),
+        "num_cpus": int(os.getenv("PARSER_NUM_CPUS_PER_REPLICA", "0")),
         "memory": int(
-            os.getenv("PARSER_MEMORY_PER_REPLICA", str(1 * 1024 * 1024 * 1024))
-        ),  # Default 1GB
+            os.getenv("PARSER_MEMORY_PER_REPLICA", str(5 * 1024 * 1024 * 1024))
+        ),  # Default 5GB
     }
 
     # Allow overriding via environment variable for explicit control
@@ -357,6 +360,14 @@ def get_ray_actor_options_based_on_gpu_availability(
         )
         ray_actor_options["num_gpus"] = default_gpus_per_replica
         return ray_actor_options
+
+    if is_standalone_mode():
+        total_cpus = os.cpu_count()
+        reserved_cpus = 1  # Ray automatically reserve 1 CPU for the ingress actor (maybe)
+        assigned_cpus = total_cpus - reserved_cpus
+        if assigned_cpus > 0:
+            ray_actor_options["num_cpus"] = assigned_cpus
+            logger.info(f"Assign {assigned_cpus} CPUs for each replica in standalone mode.")
 
     try:
         cluster_gpus = ray.cluster_resources().get("GPU", 0)
@@ -464,7 +475,7 @@ if state_manager_actor and background_parser_actor:  # Ensure both actors are av
         background_parser_actor_handle=background_parser_actor,
         parser_deployment_handle=DocumentParser.options(
             ray_actor_options=_parser_actor_options,
-            max_ongoing_requests=1,
+            max_ongoing_requests=int(os.getenv("PARSER_MAX_ONGOING_REQUESTS", "1")),
             num_replicas=os.getenv("PARSER_NUM_REPLICAS", "auto"),
             autoscaling_config=AutoscalingConfig(
                 initial_replicas=int(
