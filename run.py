@@ -1,4 +1,5 @@
 import logging
+import os
 
 import ray
 from ray import serve
@@ -15,6 +16,9 @@ logger = logging.getLogger(__name__)
 
 
 def main():
+    # Enable standalone mode to utilize all CPUs
+    os.environ["STANDALONE_MODE"] = "true"
+
     ray_initialized_by_script = False
     # Initialize Ray
     # In a production cluster, Ray might already be running.
