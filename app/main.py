@@ -147,15 +147,15 @@ class BackgroundParsingActor:
                 f"BackgroundParsingActor: Start parsing for job_id: {job_id}, file: {filename}"
             )
             start_time = time.time()
-            result = await parser_deployment_handle.parse.remote(document_content_bytes, filename)
+            result = await parser_deployment_handle.parse.remote(
+                document_content_bytes, filename
+            )
             end_time = time.time()
             parsing_duration = end_time - start_time
             actor_logger.info(
                 f"BackgroundParsingActor: Parsing for job_id: {job_id} (file: {filename}) took {parsing_duration:.2f} seconds."
             )
-            await state_manager_actor_handle.store_job_result.remote(
-                job_id, result
-            )
+            await state_manager_actor_handle.store_job_result.remote(job_id, result)
             actor_logger.info(
                 f"BackgroundParsingActor: Parsing successful for job_id: {job_id}."
             )
@@ -319,7 +319,12 @@ class ServeController:
 
 
 def is_standalone_mode() -> bool:
-    return os.environ.get("STANDALONE_MODE", "false").lower() in ("true", "1", "yes", "on")
+    return os.environ.get("STANDALONE_MODE", "false").lower() in (
+        "true",
+        "1",
+        "yes",
+        "on",
+    )
 
 
 # Helper function to determine GPU availability for Ray actors
@@ -336,6 +341,10 @@ def get_ray_actor_options_based_on_gpu_availability(
             os.getenv("PARSER_MEMORY_PER_REPLICA", str(5 * 1024 * 1024 * 1024))
         ),  # Default 5GB
     }
+
+    if is_standalone_mode():
+        # Ignore memory requirement for standalone mode
+        del ray_actor_options["memory"]
 
     # Allow overriding via environment variable for explicit control
     # PARSER_FORCE_GPU_PER_REPLICA: "0", "0.25", "1"
@@ -362,11 +371,24 @@ def get_ray_actor_options_based_on_gpu_availability(
         return ray_actor_options
 
     if is_standalone_mode():
-        total_cpus = os.cpu_count()
-        assigned_cpus = total_cpus
-        if assigned_cpus > 0:
-            ray_actor_options["num_cpus"] = assigned_cpus
-            logger.info(f"Assign {assigned_cpus} CPUs for each replica in standalone mode.")
+        nodes = ray.nodes()
+        if len(nodes) == 0:
+            logger.warning(
+                "Ray reports no available nodes in standalone mode. Cannot determine CPU resources automatically."
+            )
+        else:
+            # In standalone mode, there is typically only one node.
+            node = nodes[0]
+            cpus = node.get("Resources", {}).get("CPU", None)
+            if cpus is None:
+                logger.warning(
+                    f"Cannot get CPU resources from node, node object: {node}"
+                )
+            else:
+                ray_actor_options["num_cpus"] = cpus
+                logger.info(
+                    f"Assigned {cpus} CPUs for each replica in standalone mode."
+                )
 
     try:
         cluster_gpus = ray.cluster_resources().get("GPU", 0)
