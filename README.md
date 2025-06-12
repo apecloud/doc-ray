@@ -7,7 +7,6 @@ This project implements an asynchronous document parsing service using Ray Serve
 
 - **Asynchronous API**: Submit, status, and result endpoints.
 - **Scalable**: Built on Ray Serve, allowing for scaling from a single machine to a cluster.
-- **State Management**: Uses a Ray Actor (`JobStateManager`) to manage job states, ensuring consistency even in a clustered environment.
 - **Containerized**: Dockerfile provided for easy building and deployment.
 - **Modern Tooling**: Uses `uv` for package management.
 
@@ -64,6 +63,35 @@ This project implements an asynchronous document parsing service using Ray Serve
     -   Response (if pending/failed): `{"job_id": "unique_job_id", "status": "processing|failed", "message": "...", "error": "..."}`
 -   **DELETE `/result/{job_id}`**: Deletes a job and its result to free up resources.
     -   Response (if successful): `{"job_id": "unique_job_id", "message": "Job and result deleted successfully."}` (Status 200)
+
+## Testing with `client.py`
+
+Once the `doc-ray` service is running, you can use the provided `client.py` script to submit a document for parsing and test the service. The script accepts both local file paths and URLs as input.
+
+1.  **Ensure `client.py` is executable or run it with `python`**:
+    The script is located in the `scripts` directory.
+
+2.  **Basic Usage**:
+    Navigate to the root directory of the project and run:
+
+    * **For a local file:**
+    ```bash
+    python scripts/client.py path/to/your/document.pdf
+    ```
+    Replace `path/to/your/document.pdf` with the actual path to the local document you want to test.
+
+    * **For a URL:**
+    ```bash
+    python scripts/client.py https://raw.githubusercontent.com/microsoft/markitdown/da7bcea527ed04cf6027cc8ece1e1aad9e08a9a1/packages/markitdown/tests/test_files/test.pdf
+    ```
+    Replace the URL with the actual URL of the document you want to test. The script will download the content from the URL before submitting it.
+
+3.  **Specifying `DOCRAY_HOST` (if not default)**:
+    If your `doc-ray` service is not running at the default `http://localhost:8639`, you need to set the `DOCRAY_HOST` environment variable:
+    ```bash
+    DOCRAY_HOST="http://your-doc-ray-service-address:port" python scripts/client.py path/to/your/document.pdf
+    ```
+    For example, if it's running on a different host or port.
 
 ## Deployment
 
