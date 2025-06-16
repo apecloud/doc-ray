@@ -27,16 +27,6 @@ if ray.is_initialized():
 else:
     logger = logging.getLogger(__name__)
 
-# TODO: support image formats
-SUPPORTED_EXTENSIONS = [
-    ".pdf",
-    # convert to .pdf first
-    ".docx",
-    ".doc",
-    ".pptx",
-    ".ppt",
-]
-
 
 def get_soffice_cmd() -> str | None:
     return shutil.which("soffice")
