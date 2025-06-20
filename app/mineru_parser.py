@@ -282,16 +282,30 @@ def adjust_title_level(pdf_bytes: bytes | None, middle_json: dict):
         # Assign title level base on the estimated font size
         assign_title_level(title_blocks, delta=2)
     else:
-        # Align to the title block which has the closest font size
+        # Align to the title block which has the closest font size,
+        # or set to the next level if smaller than the last level
+        min_font_size = min(title_blocks_with_font_size, key=lambda x: x[0])[0]
+        deepest_title_block = max(
+            title_blocks_with_font_size, key=lambda x: x[2]["level"]
+        )
+        deepest_level = deepest_title_block[2]["level"]
+        if deepest_level > max_title_level:
+            deepest_level = max_title_level
+        delta = 2
         for title_block in title_blocks:
             # Only process those without assigned levels
-            if "level" not in title_block[2]:
-                # Find the closest font size among those already assigned a level
-                closest_block = min(
-                    title_blocks_with_font_size,
-                    key=lambda x: abs(x[0] - title_block[0]),
-                )
-                title_block[2]["level"] = closest_block[2]["level"]
+            if "level" in title_block[2]:
+                continue
+            # The font size of the current title block is too small
+            if title_block[0] < min_font_size - delta:
+                title_block[2]["level"] = deepest_level
+                continue
+
+            # Align to the title block which has the closest font size
+            closest_block = min(
+                title_blocks_with_font_size, key=lambda x: abs(x[0] - title_block[0])
+            )
+            title_block[2]["level"] = closest_block[2]["level"]
 
 
 def collect_all_text_blocks(pdf_bytes: bytes) -> dict[int, list[tuple[str, float]]]:
