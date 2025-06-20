@@ -20,14 +20,12 @@ from mineru.data.data_reader_writer import FileBasedDataWriter
 from mineru.utils.enum_class import BlockType, MakeMode
 from PIL import Image
 
+from .const import IMAGE_EXTS, OFFICE_DOC_EXTS, PDF_EXT
+
 if ray.is_initialized():
     logger = ray.logger
 else:
     logger = logging.getLogger(__name__)
-
-pdf_ext = ".pdf"
-office_doc_exts = [".doc", ".docx", ".pptx", ".ppt"]
-image_exts = [".png", ".jpg", ".jpeg", ".bmp"]
 
 max_title_level = 8
 
@@ -395,11 +393,11 @@ def collect_all_text_blocks(pdf_bytes: bytes) -> dict[int, list[tuple[str, float
 
 def to_pdf_bytes(data: bytes, filename: str) -> tuple[bool, bytes]:
     ext = Path(filename).suffix.lower()
-    if ext == pdf_ext:
+    if ext == PDF_EXT:
         return True, sanitize_pdf(data)
-    elif ext in office_doc_exts:
+    elif ext in OFFICE_DOC_EXTS:
         return True, office_doc_to_pdf(data, ext)
-    elif ext in image_exts:
+    elif ext in IMAGE_EXTS:
         return True, image_to_pdf(data)
     else:
         return False, b""
