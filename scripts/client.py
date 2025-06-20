@@ -92,7 +92,7 @@ def parse_file(path: Path):
         )
         print("\nMarkdown Content:\n")
         print(result["markdown"])
-        return
+        return result
 
     except requests.exceptions.RequestException:
         logger.exception("DocRay API request failed")
@@ -116,6 +116,11 @@ def main():
         type=str,
         help="The path to the local file or the URL of the file to be parsed.",
     )
+    parser.add_argument(
+        "--dump-middle-json",
+        action="store_true",
+        help="Dump the middle JSON result",
+    )
     args = parser.parse_args()
 
     input_path: str = args.input_path
@@ -131,7 +136,10 @@ def main():
 
     try:
         logger.info(f"Starting to parse file: {input_path}")
-        parse_file(input_path)
+        result = parse_file(input_path)
+        if args.dump_middle_json:
+            print("\nMiddle JSON:\n")
+            print(result["middle_json"])
     except Exception as e:
         logger.error(
             f"An error occurred during the processing of '{input_path}'.", exc_info=True

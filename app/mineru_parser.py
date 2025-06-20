@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import shutil
+import statistics
 import subprocess
 import tempfile
 import unicodedata
@@ -28,6 +29,23 @@ pdf_ext = ".pdf"
 office_doc_exts = [".doc", ".docx", ".pptx", ".ppt"]
 image_exts = [".png", ".jpg", ".jpeg", ".bmp"]
 
+max_title_level = 8
+
+
+def _monkey_patch_mineru():
+    import mineru.backend.pipeline.pipeline_middle_json_mkcontent as mkcontent
+
+    def my_get_title_level(block):
+        title_level = block.get("level", 1)
+        if title_level > max_title_level:
+            title_level = max_title_level
+        elif title_level < 1:
+            title_level = 0
+        return title_level
+
+    # The original get_title_level only supports 4 levels, which is too small
+    mkcontent.get_title_level = my_get_title_level
+
 
 @dataclass
 class ParseResult:
@@ -40,12 +58,17 @@ class ParseResult:
 
 class MinerUParser:
     def __init__(self):
-        self.set_config_path = None
+        self.prepared = False
+
+    def _prepare(self):
+        if self.prepared:
+            return
+        if not self._set_config_path():
+            raise Exception("mineru.json not found")
+        _monkey_patch_mineru()
+        self.prepared = True
 
     def _set_config_path(self) -> bool:
-        if self.set_config_path is not None:
-            return self.set_config_path
-
         path = Path(os.getenv("MINERU_CONFIG_JSON", "./mineru.json"))
         if not path.exists():
             return False
@@ -57,19 +80,17 @@ class MinerUParser:
         from mineru.utils import config_reader
 
         config_reader.CONFIG_FILE_NAME = str(path.absolute())
-        self.set_config_path = True
         return True
 
     def parse(self, data: bytes, filename: str) -> ParseResult:
+        self._prepare()
+
         # Lazily import these modules because they are slow to load
         from mineru.backend.pipeline.model_json_to_middle_json import (
             result_to_middle_json,
         )
         from mineru.backend.pipeline.pipeline_analyze import doc_analyze
         from mineru.backend.pipeline.pipeline_middle_json_mkcontent import union_make
-
-        if not self._set_config_path():
-            raise Exception("mineru.json not found")
 
         ok, pdf_data = to_pdf_bytes(data, filename)
         if not ok:
@@ -177,13 +198,15 @@ def adjust_title_level(pdf_bytes: bytes | None, middle_json: dict):
     if pdf_bytes is not None:
         raw_text_blocks = collect_all_text_blocks(pdf_bytes)
     title_blocks = []
+    font_size_ratios = []
     for page_num, page_info in enumerate(middle_json.get("pdf_info", [])):
         paras_of_layout: list[dict[str, Any]] = page_info.get("para_blocks")
         if not paras_of_layout:
             continue
         raw_text_to_font_size = {}
         for raw_text_tup in raw_text_blocks.get(page_num, []):
-            raw_text_to_font_size[unicodedata.normalize("NFKC", raw_text_tup[0])] = raw_text_tup[1]
+            text = unicodedata.normalize("NFKC", raw_text_tup[0])
+            raw_text_to_font_size[text] = raw_text_tup[1]
         for para_block in paras_of_layout:
             para_type = para_block["type"]
             if para_type != BlockType.TITLE:
@@ -196,55 +219,79 @@ def adjust_title_level(pdf_bytes: bytes | None, middle_json: dict):
                 return
 
             font_size = None
+            bbox = None
             lines = para_block.get("lines", [])
             for line in lines:
                 spans = line.get("spans", [])
                 for span in spans:
-                    content = unicodedata.normalize("NFKC", span.get("content", "").strip())
+                    content = span.get("content", "").strip()
+                    content = unicodedata.normalize("NFKC", content)
                     font_size = raw_text_to_font_size.get(content, None)
-                    if font_size is not None:
-                        break
-                if font_size is not None:
+                    bbox = span.get("bbox", None)
                     break
+                break
 
-            # If the font size cannot be obtained directly from the PDF document,
-            # calculate an approximate font size based on the bounding box height.
-            if font_size is None:
-                bbox = para_block.get("bbox", None)
-                if bbox is not None:
-                    height = bbox[3] - bbox[1]
-                    lines = para_block.get("lines", None)
-                    if lines is not None and len(lines) > 1:
-                        height = height / len(lines)
-                    # NOTE: This formula is derived from simple observation
-                    # and may not be applicable to all situations.
-                    font_size = height * 0.78
-
-            if font_size is None:
-                continue
+            height = None
+            if bbox is not None and len(bbox) == 4:
+                height = bbox[3] - bbox[1]
+            if font_size is not None and height is not None and height > 0:
+                ratio = font_size / height
+                font_size_ratios.append(ratio)
 
             title_blocks.append(
-                (
+                [
                     font_size,
+                    height,
                     para_block,
-                )
+                ]
             )
 
     if len(title_blocks) == 0:
         return
 
-    title_blocks.sort(key=lambda x: x[0], reverse=True)
-    level = 1
-    prev_font_size = None
-    delta = 0.2
-    max_level = 8
-    for font_size, para_block in title_blocks:
-        if prev_font_size is not None and prev_font_size - font_size > delta:
-            level += 1
-            if level > max_level:
-                level = max_level
-        para_block["level"] = level
-        prev_font_size = font_size
+    def assign_title_level(titles, delta=0.2):
+        titles.sort(key=lambda x: x[0], reverse=True)
+        level = 1
+        prev_font_size = None
+        max_level = max_title_level
+        for title_block in titles:
+            font_size = title_block[0]
+            para_block = title_block[2]
+            if prev_font_size is not None and prev_font_size - font_size > delta:
+                level += 1
+                if level > max_level:
+                    level = max_level
+            para_block["level"] = level
+            prev_font_size = font_size
+
+    # Assign title level base on the font size from the PDF
+    title_blocks_with_font_size = list(filter(lambda x: x[0] is not None, title_blocks))
+    assign_title_level(title_blocks_with_font_size)
+
+    # If the font size cannot be obtained directly from the PDF document,
+    # calculate an approximate font size based on the bounding box height.
+    font_size_factor = statistics.median(font_size_ratios) if font_size_ratios else 1.0
+    for title_block in title_blocks:
+        if title_block[0] is None and title_block[1] is not None:
+            title_block[0] = title_block[1] * font_size_factor
+
+    # Filter out title blocks if its font size can't be determined.
+    title_blocks = list(filter(lambda x: x[0] is not None, title_blocks))
+
+    if len(title_blocks_with_font_size) == 0:
+        # Assign title level base on the estimated font size
+        assign_title_level(title_blocks, delta=2)
+    else:
+        # Align to the title block which has the closest font size
+        for title_block in title_blocks:
+            # Only process those without assigned levels
+            if "level" not in title_block[2]:
+                # Find the closest font size among those already assigned a level
+                closest_block = min(
+                    title_blocks_with_font_size,
+                    key=lambda x: abs(x[0] - title_block[0]),
+                )
+                title_block[2]["level"] = closest_block[2]["level"]
 
 
 def collect_all_text_blocks(pdf_bytes: bytes) -> dict[int, list[tuple[str, float]]]:
@@ -298,7 +345,7 @@ def collect_all_text_blocks(pdf_bytes: bytes) -> dict[int, list[tuple[str, float
         return {}
 
 
-# # Extract text from PDF by pdfium. But sometimes it can't correctly extract the font size.
+# # Extract texts from PDF by pdfium. But sometimes it can't correctly extract the font size.
 # # Keep the code for reference.
 # from mineru.utils.pdf_text_tool import get_page
 # def collect_all_text_blocks(pdf_bytes: bytes) -> dict[int, list[tuple[str, float]]]:
@@ -435,3 +482,54 @@ def image_to_pdf(image_bytes: bytes) -> bytes:
     image.save(pdf_buffer, format="PDF", save_all=True)
     pdf_bytes = pdf_buffer.getvalue()
     return pdf_bytes
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Adjust title levels in a middle.json file."
+    )
+    parser.add_argument("pdf_file", type=str, help="Path to the PDF file")
+    parser.add_argument(
+        "middle_json_path", type=str, help="Path to the middle.json file"
+    )
+    parser.add_argument("--dump-markdown", action="store_true")
+    args = parser.parse_args()
+
+    logging.basicConfig(level=logging.INFO)
+
+    try:
+        with open(args.pdf_file, "rb") as f:
+            pdf_bytes = f.read()
+        with open(args.middle_json_path, "r", encoding="utf-8") as f:
+            middle_json_data = json.load(f)
+
+        for page_num, page_info in enumerate(middle_json_data.get("pdf_info", [])):
+            paras_of_layout: list[dict[str, Any]] = page_info.get("para_blocks")
+            if not paras_of_layout:
+                continue
+            for para_block in paras_of_layout:
+                para_type = para_block["type"]
+                if para_type != BlockType.TITLE:
+                    continue
+                para_block.pop("level", None)
+
+        adjust_title_level(pdf_bytes, middle_json_data)
+
+        if not args.dump_markdown:
+            print(json.dumps(middle_json_data, ensure_ascii=False, indent=2))
+        else:
+            from mineru.backend.pipeline.pipeline_middle_json_mkcontent import (
+                union_make,
+            )
+
+            _monkey_patch_mineru()
+            markdown = union_make(middle_json_data.get("pdf_info", []), "mm_markdown")
+            print(markdown)
+    except FileNotFoundError:
+        logger.error(f"Error: File not found at {args.middle_json_path}")
+    except json.JSONDecodeError:
+        logger.error(f"Error: Could not decode JSON from {args.middle_json_path}")
+    except Exception as e:
+        logger.error(f"An unexpected error occurred: {e}")
