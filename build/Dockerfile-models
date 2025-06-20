@@ -4,9 +4,9 @@ ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 
 # Define whether to use ModelScope or Hugging Face models.
-# This can be overridden at build time via --build-arg USE_MODELSCOPE=1
-ARG USE_MODELSCOPE="0"
-ENV USE_MODELSCOPE=${USE_MODELSCOPE}
+# This can be overridden at build time via --build-arg MODEL_SOURCE=modelscope
+ARG MODEL_SOURCE="huggingface"
+ENV MODEL_SOURCE=${MODEL_SOURCE}
 
 # Define the target directory for Hugging Face models/cache.
 # This can be overridden at build time via --build-arg MODELS_CACHE_PATH=...
@@ -16,10 +16,9 @@ ENV HF_HOME=${MODELS_CACHE_PATH} \
     MODELSCOPE_CACHE=${MODELS_CACHE_PATH}
 RUN mkdir -p ${HF_HOME} # Ensure the cache directory exists
 
-RUN pip install --no-cache-dir huggingface_hub modelscope
-COPY scripts/prepare_for_mineru.py ./scripts/prepare_for_mineru.py
-RUN python ./scripts/prepare_for_mineru.py
+RUN pip install --no-cache-dir huggingface_hub modelscope mineru
+RUN mineru-models-download -s ${MODEL_SOURCE} -m pipeline && cp ~/mineru.json /app
 
 FROM scratch
 COPY --from=downloader /models_cache /models_cache
-COPY --from=downloader /app/magic-pdf*.json /mineru/
+COPY --from=downloader /app/mineru*.json /mineru/

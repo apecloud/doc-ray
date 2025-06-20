@@ -30,7 +30,7 @@ COPY uv.lock ./
 
 # Install dependencies using uv.
 # --no-cache to reduce image size
-RUN uv sync --no-cache --prerelease=allow
+RUN uv sync --no-cache
 
 # Activate the virtual environment by setting PATH and VIRTUAL_ENV.
 # This ensures that subsequent commands use the Python interpreter and packages from this venv.

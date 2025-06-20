@@ -12,7 +12,7 @@ dependencies = [
     "memray>=1.17.2",
     "mineru[core]>=2.0.4",
     "pillow>=11.2.1",
-    "pymupdf>=1.26.1",
+    "pymupdf==1.26.0",
 ]
 
 [project.optional-dependencies]
