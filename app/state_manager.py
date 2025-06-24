@@ -77,7 +77,7 @@ class JobStateManager:
         logger.info(f"Fetching status for job_id {job_id}: {status_info['status']}")
         return status_info
 
-    def get_job_result(self, job_id: str) -> Optional[Any]:
+    async def get_job_result(self, job_id: str) -> Optional[Any]:
         if job_id not in self._job_states:
             logger.warning(f"Attempted to get result for unknown job_id: {job_id}")
             return None
@@ -109,7 +109,7 @@ class JobStateManager:
                         "status": "failed",
                     }
 
-                actual_result_data = ray.get(result_object_ref)
+                actual_result_data = await result_object_ref
                 return actual_result_data
             except ray.exceptions.ObjectLostError:
                 logger.error(
