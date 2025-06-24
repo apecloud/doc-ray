@@ -9,7 +9,7 @@ FROM ${BASE_IMAGE} AS base
 FROM base AS base-with-models
 COPY --from=models /models_cache /models_cache
 COPY --from=models /mineru /mineru
-ENV MINERU_CONFIG_JSON=/mineru/magic-pdf.json
+ENV MINERU_CONFIG_JSON=/mineru/mineru.json
 
 FROM ${FINAL_BASE} AS final
 

@@ -33,13 +33,14 @@ This project implements an asynchronous document parsing service using Ray Serve
 
 3.  **Install dependencies using `uv`**:
     ```bash
-    uv sync --prerelease=allow --all-extras
+    uv sync --all-extras
     ```
 
 4.  **Prepare MinerU prerequisites**:
-    Run the script to download models required by MinerU and generate the `magic-pdf.json` file.
+    Run the script to download models required by MinerU and generate the `mineru.json` file.
     ```bash
-    make download-models
+    mineru-models-download -m pipeline
+    cp ~/mineru.json .
     ```
 
 5.  **Run the service locally**:

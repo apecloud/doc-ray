@@ -8,6 +8,8 @@ from ray import serve
 from ray.actor import ActorHandle
 from ray.serve.handle import DeploymentHandle
 
+from .const import SUPPORTED_EXTS
+
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
@@ -19,16 +21,6 @@ app = FastAPI(
     description="An API to submit documents for asynchronous parsing, check status, and retrieve results.",
     version="0.1.0",
 )
-
-# TODO: support image formats
-SUPPORTED_EXTENSIONS = [
-    ".pdf",
-    # convert to .pdf first
-    ".docx",
-    ".doc",
-    ".pptx",
-    ".ppt",
-]
 
 
 # --- Pydantic Models for Request and Response ---
@@ -102,10 +94,10 @@ class ServeController:
 
         # Check if the file format is supported
         file_extension = os.path.splitext(file.filename)[1].lower()
-        if file_extension not in SUPPORTED_EXTENSIONS:
+        if file_extension not in SUPPORTED_EXTS:
             raise HTTPException(
                 status_code=415,
-                detail=f"Unsupported file format: {file_extension}. Supported formats are: {', '.join(SUPPORTED_EXTENSIONS)}",
+                detail=f"Unsupported file format: {file_extension}. Supported formats are: {', '.join(SUPPORTED_EXTS)}",
             )
 
         document_content_bytes = await file.read()

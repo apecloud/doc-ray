@@ -1,35 +1,48 @@
 import base64
+import io
 import json
 import logging
 import os
 import shutil
+import statistics
+import subprocess
 import tempfile
+import unicodedata
 from dataclasses import dataclass, field
+from hashlib import md5
 from pathlib import Path
 from typing import Any
 
 import fitz
-import numpy as np
+import pypdfium2 as pdfium
 import ray
-import ray.serve.handle
-from magic_pdf.config.enums import SupportedPdfParseMethod
-from magic_pdf.config.ocr_content_type import BlockType
-from magic_pdf.data.data_reader_writer import FileBasedDataReader, FileBasedDataWriter
-from magic_pdf.data.dataset import Dataset, PymuDocDataset
-from magic_pdf.data.read_api import read_local_office
-from magic_pdf.libs import config_reader
-from magic_pdf.model.doc_analyze_by_custom_model import may_batch_image_analyze
-from magic_pdf.model.model_list import AtomicModel
-from magic_pdf.model.sub_modules.model_init import AtomModelSingleton
+from mineru.data.data_reader_writer import FileBasedDataWriter
+from mineru.utils.enum_class import BlockType, MakeMode
+from PIL import Image
+
+from .const import IMAGE_EXTS, OFFICE_DOC_EXTS, PDF_EXT
 
 if ray.is_initialized():
     logger = ray.logger
 else:
     logger = logging.getLogger(__name__)
 
+max_title_level = 8
 
-def get_soffice_cmd() -> str | None:
-    return shutil.which("soffice")
+
+def _monkey_patch_mineru():
+    import mineru.backend.pipeline.pipeline_middle_json_mkcontent as mkcontent
+
+    def my_get_title_level(block):
+        title_level = block.get("level", 1)
+        if title_level > max_title_level:
+            title_level = max_title_level
+        elif title_level < 1:
+            title_level = 0
+        return title_level
+
+    # The original get_title_level only supports 4 levels, which is too small
+    mkcontent.get_title_level = my_get_title_level
 
 
 @dataclass
@@ -42,52 +55,44 @@ class ParseResult:
 
 
 class MinerUParser:
-    def __init__(
-        self,
-        parser_deployment_handle: ray.serve.handle.DeploymentHandle = None,
-    ):
-        self.parser_deployment_handle = parser_deployment_handle
-        self.set_config_path = None
+    def __init__(self):
+        self.prepared = False
 
-    def _detect_device_mode(self) -> str:
-        if os.getenv("MINERU_DEVICE_MODE") is not None:
-            return os.getenv("MINERU_DEVICE_MODE")
-        try:
-            import torch
-
-            if torch.cuda.is_available():
-                return "cuda"
-            if torch.mps.is_available():
-                return "mps"
-        except Exception:
-            logger.exception("_detect_device_mode failed")
-        return "cpu"
+    def _prepare(self):
+        if self.prepared:
+            return
+        if not self._set_config_path():
+            raise Exception("mineru.json not found")
+        _monkey_patch_mineru()
+        self.prepared = True
 
     def _set_config_path(self) -> bool:
-        if self.set_config_path is not None:
-            return self.set_config_path
-
-        path = Path(os.environ.get("MINERU_CONFIG_JSON", "./magic-pdf.json"))
+        path = Path(os.getenv("MINERU_CONFIG_JSON", "./mineru.json"))
         if not path.exists():
             return False
 
-        device_mode = self._detect_device_mode()
-        if device_mode != "cpu":
-            derived_conf = str(path).replace(".json", f"-{device_mode}.json")
-            if Path(derived_conf).exists():
-                path = Path(derived_conf)
+        if os.getenv("MINERU_MODEL_SOURCE", None) is None:
+            os.environ["MINERU_MODEL_SOURCE"] = "local"
+
+        # Lazily import here because the module imports PyTorch.
+        from mineru.utils import config_reader
 
         config_reader.CONFIG_FILE_NAME = str(path.absolute())
-        self.set_config_path = True
         return True
 
     def parse(self, data: bytes, filename: str) -> ParseResult:
-        extension = Path(filename).suffix.lower()
-        if extension != ".pdf":
-            if get_soffice_cmd() is None:
-                raise Exception("soffice command not found")
-        if not self._set_config_path():
-            raise Exception("magic-pdf.json not found")
+        self._prepare()
+
+        # Lazily import these modules because they are slow to load
+        from mineru.backend.pipeline.model_json_to_middle_json import (
+            result_to_middle_json,
+        )
+        from mineru.backend.pipeline.pipeline_analyze import doc_analyze
+        from mineru.backend.pipeline.pipeline_middle_json_mkcontent import union_make
+
+        ok, pdf_data = to_pdf_bytes(data, filename)
+        if not ok:
+            raise Exception(f"Unsupported file format, filename: {filename}")
 
         temp_dir = os.environ.get("MINERU_TEMP_FILE_DIR", None)
         temp_dir_obj: tempfile.TemporaryDirectory | None = None
@@ -96,65 +101,32 @@ class MinerUParser:
             temp_dir = temp_dir_obj.name
 
         try:
-            doc_path = os.path.join(temp_dir, filename)
-            with open(doc_path, "wb") as f:
-                f.write(data)
+            pdf_bytes_list = [pdf_data]
+            lang_list = ["ch"]
+            result = doc_analyze(pdf_bytes_list, lang_list)
 
-            local_image_dir = os.path.join(temp_dir, "output/images")
+            infer_result = result[0][0]
+            images_list = result[1][0]
+            pdf_doc = result[2][0]
+            _lang = result[3][0]
+            _ocr_enable = result[4][0]
 
+            local_image_dir = os.path.join(
+                temp_dir, md5(filename.encode("utf-8")).hexdigest(), "images"
+            )
             os.makedirs(local_image_dir, exist_ok=True)
-
             image_writer = FileBasedDataWriter(local_image_dir)
 
-            parse_method = SupportedPdfParseMethod.OCR
-            ds: PymuDocDataset = None
-            if extension == ".pdf":
-                reader1 = FileBasedDataReader("")
-                pdf_bytes = reader1.read(doc_path)
-                ds = PymuDocDataset(pdf_bytes)
-                parse_method = ds.classify()
-            else:
-                # Note: this requires the "soffice" command to convert office docs into PDF.
-                # The "soffice" command is part of LibreOffice, can be installed via:
-                #   apt-get install libreoffice
-                #   brew install libreoffice
-                ds = read_local_office(doc_path)[0]
+            middle_json = result_to_middle_json(
+                infer_result, images_list, pdf_doc, image_writer, _lang, _ocr_enable
+            )
+            adjust_title_level(pdf_data, middle_json)
+            add_merged_text_field(middle_json)
+            middle_json_str = json.dumps(middle_json, ensure_ascii=False)
 
-            # HACK: distributed OCR model inference
-            if self.parser_deployment_handle is not None:
-                atom_model = AtomModelSingleton()
-                if not hasattr(atom_model, "_models"):
-                    raise RuntimeError(
-                        "AtomModelSingleton doesn't have _models attribute"
-                    )
-                if not isinstance(atom_model._models, dict):
-                    raise RuntimeError("AtomModelSingleton._models is not a dict")
-                key = (AtomicModel.OCR, None)
-                if key not in atom_model._models:
-                    atom_model._models[key] = DistributedOCRModel(
-                        parser_deployment_handle=self.parser_deployment_handle
-                    )
-                    logger.info(f"Initialized DistributedOCRModel for {key}.")
-
-            from magic_pdf.operators.pipes import PipeResult
-
-            pipe_result: PipeResult = None
-            if parse_method == SupportedPdfParseMethod.OCR:
-                result = ds.apply(self._doc_analyze, ocr=True)
-                pipe_result = result.pipe_ocr_mode(image_writer)
-            else:
-                result = ds.apply(self._doc_analyze, ocr=False)
-                pipe_result = result.pipe_txt_mode(image_writer)
-
-            middle_json = None
-            if hasattr(pipe_result, "_pipe_res"):
-                adjust_title_level(doc_path, pipe_result._pipe_res)
-                add_merged_text_field(pipe_result._pipe_res)
-                middle_json = json.dumps(pipe_result._pipe_res, ensure_ascii=False)
-
-            markdown = pipe_result.get_markdown("images")
-            if middle_json is None:
-                middle_json = pipe_result.get_middle_json()
+            pdf_info = middle_json["pdf_info"]
+            image_dir = str(os.path.basename(local_image_dir))
+            markdown = union_make(pdf_info, MakeMode.MM_MD, image_dir)
 
             images_dict = {}
             if os.path.exists(local_image_dir) and os.listdir(local_image_dir):
@@ -166,7 +138,7 @@ class MinerUParser:
                             images_dict[name] = base64.b64encode(f.read()).decode()
 
             return ParseResult(
-                markdown=markdown, middle_json=middle_json, images=images_dict
+                markdown=markdown, middle_json=middle_json_str, images=images_dict
             )
         except:
             logger.exception("MinerUParser failed")
@@ -175,171 +147,26 @@ class MinerUParser:
             if temp_dir_obj is not None:
                 temp_dir_obj.cleanup()
 
-    def ocr(
-        self,
-        img: np.ndarray | list | str | bytes,
-        det=True,
-        rec=True,
-        mfd_res=None,
-        tqdm_enable=False,
-    ):
-        if not self._set_config_path():
-            raise Exception("magic-pdf.json not found")
-        atom_model = AtomModelSingleton()
-        ocr_model = atom_model.get_atom_model(
-            atom_model_name=AtomicModel.OCR,
-            # These args are from https://github.com/opendatalab/MinerU/blob/a911c29fbb9fe175a034c7a2f49abd7581088cd6/magic_pdf/pdf_parse_union_core_v2.py#L992-L993
-            ocr_show_log=False,
-            det_db_box_thresh=0.3,
-        )
-        return ocr_model.ocr(img, det, rec, mfd_res, tqdm_enable)
-
-    def batch_image_analyze(
-        self,
-        images_with_extra_info: list[tuple[np.ndarray, bool, str]],
-        ocr: bool,
-        show_log: bool = False,
-        layout_model=None,
-        formula_enable=None,
-        table_enable=None,
-    ) -> list:
-        if not self._set_config_path():
-            raise Exception("magic-pdf.json not found")
-        result = may_batch_image_analyze(
-            images_with_extra_info,
-            ocr,
-            show_log,
-            layout_model,
-            formula_enable,
-            table_enable,
-        )
-        return result
-
-    # from https://github.com/opendatalab/MinerU/blob/a911c29fbb9fe175a034c7a2f49abd7581088cd6/magic_pdf/model/doc_analyze_by_custom_model.py#L123
-    def _doc_analyze(
-        self,
-        dataset: Dataset,
-        ocr: bool = False,
-        show_log: bool = False,
-        start_page_id=0,
-        end_page_id=None,
-        lang=None,
-        layout_model=None,
-        formula_enable=None,
-        table_enable=None,
-    ):
-        end_page_id = (
-            end_page_id
-            if end_page_id is not None and end_page_id >= 0
-            else len(dataset) - 1
-        )
-
-        MIN_BATCH_INFERENCE_SIZE = int(
-            os.environ.get("MINERU_MIN_BATCH_INFERENCE_SIZE", 200)
-        )
-        images = []
-        page_wh_list = []
-        for index in range(len(dataset)):
-            if start_page_id <= index <= end_page_id:
-                page_data = dataset.get_page(index)
-                img_dict = page_data.get_image()
-                images.append(img_dict["img"])
-                page_wh_list.append((img_dict["width"], img_dict["height"]))
-
-        images_with_extra_info = [
-            (images[index], ocr, dataset._lang) for index in range(len(images))
-        ]
-
-        if len(images) >= MIN_BATCH_INFERENCE_SIZE:
-            batch_size = MIN_BATCH_INFERENCE_SIZE
-            batch_images = [
-                images_with_extra_info[i : i + batch_size]
-                for i in range(0, len(images_with_extra_info), batch_size)
-            ]
-        else:
-            batch_images = [images_with_extra_info]
-
-        results = []
-        if self.parser_deployment_handle is None:
-            processed_images_count = 0
-            for index, batch_image in enumerate(batch_images):
-                processed_images_count += len(batch_image)
-                logger.info(
-                    f"Batch {index + 1}/{len(batch_images)}: {processed_images_count} pages/{len(images_with_extra_info)} pages"
-                )
-                result = may_batch_image_analyze(
-                    batch_image,
-                    ocr,
-                    show_log,
-                    layout_model,
-                    formula_enable,
-                    table_enable,
-                )
-                results.extend(result)
-        else:
-            logger.info(
-                f"Distributing {len(batch_images)} mini-batches using Ray remote calls via handle: {self.parser_deployment_handle}"
-            )
-            resp_list: list[ray.serve.handle.DeploymentResponse] = []
-            for index, batch_image in enumerate(batch_images):
-                logger.info(
-                    f"Submitting mini-batch {index + 1}/{len(batch_images)} ({len(batch_image)} pages) for remote processing."
-                )
-                # Call the batch_image_analyze method on the DocumentParser deployment
-                resp = self.parser_deployment_handle.batch_image_analyze.remote(
-                    images_with_extra_info=batch_image,
-                    ocr=ocr,
-                    show_log=show_log,
-                    layout_model=layout_model,
-                    formula_enable=formula_enable,
-                    table_enable=table_enable,
-                )
-                resp_list.append(resp)
-
-            logger.info(
-                f"Waiting for {len(resp_list)} remote mini-batches to complete..."
-            )
-            for index, resp in enumerate(resp_list):
-                result = resp.result()
-                results.extend(result)
-                logger.info(f"Mini-batch {index + 1}/{len(resp_list)} completed.")
-
-        model_json = []
-        for index in range(len(dataset)):
-            if start_page_id <= index <= end_page_id:
-                result = results.pop(0)
-                page_width, page_height = page_wh_list.pop(0)
-            else:
-                result = []
-                page_height = 0
-                page_width = 0
-
-            page_info = {"page_no": index, "width": page_width, "height": page_height}
-            page_dict = {"layout_dets": result, "page_info": page_info}
-            model_json.append(page_dict)
-
-        from magic_pdf.operators.models import InferenceResult
-
-        return InferenceResult(model_json, dataset)
-
 
 def add_merged_text_field(pipe_res: dict):
     # Lazily import merge_para_with_text here, to avoid initializing
-    # ocr_mkcontent.latex_delimiters_config too early. This is because
-    # it needs to read the configuration file, and here it can be ensured
-    # that the configuration file has been set up.
-    from magic_pdf.dict2md.ocr_mkcontent import merge_para_with_text
+    # pipeline_middle_json_mkcontent.latex_delimiters_config too early.
+    # This is because it needs to read the configuration file, and here
+    # it can be ensured that the configuration file has been set up.
+    from mineru.backend.pipeline.pipeline_middle_json_mkcontent import (
+        merge_para_with_text,
+    )
 
     def _set_merged_text_field(block: dict[str, Any]):
         block["merged_text"] = merge_para_with_text(block)
 
     simple_block_types = set(
         [
-            BlockType.Text,
-            BlockType.List,
-            BlockType.Index,
-            BlockType.Title,
-            BlockType.InterlineEquation,
+            BlockType.TEXT,
+            BlockType.LIST,
+            BlockType.INDEX,
+            BlockType.TITLE,
+            BlockType.INTERLINE_EQUATION,
         ]
     )
 
@@ -351,31 +178,36 @@ def add_merged_text_field(pipe_res: dict):
             para_type = para_block["type"]
             if para_type in simple_block_types:
                 _set_merged_text_field(para_block)
-            elif para_type == BlockType.Image:
-                handle_block_types = [BlockType.ImageCaption, BlockType.ImageFootnote]
+            elif para_type == BlockType.IMAGE:
+                handle_block_types = [BlockType.IMAGE_CAPTION, BlockType.IMAGE_FOOTNOTE]
                 for block in para_block["blocks"]:
                     if block["type"] in handle_block_types:
                         _set_merged_text_field(block)
-            elif para_type == BlockType.Table:
-                handle_block_types = [BlockType.TableCaption, BlockType.TableFootnote]
+            elif para_type == BlockType.TABLE:
+                handle_block_types = [BlockType.TABLE_CAPTION, BlockType.TABLE_FOOTNOTE]
                 for block in para_block["blocks"]:
                     if block["type"] in handle_block_types:
                         _set_merged_text_field(block)
 
 
-def adjust_title_level(pdf_file: Path | None, pipe_res: dict):
+def adjust_title_level(pdf_bytes: bytes | None, middle_json: dict):
     logger.info("Adjusting title level...")
     raw_text_blocks: dict[int, list[tuple[str, float]]] = {}
-    if pdf_file is not None:
-        raw_text_blocks = collect_all_text_blocks(pdf_file)
+    if pdf_bytes is not None:
+        raw_text_blocks = collect_all_text_blocks(pdf_bytes)
     title_blocks = []
-    for page_num, page_info in enumerate(pipe_res.get("pdf_info", [])):
+    font_size_ratios = []
+    for page_num, page_info in enumerate(middle_json.get("pdf_info", [])):
         paras_of_layout: list[dict[str, Any]] = page_info.get("para_blocks")
         if not paras_of_layout:
             continue
+        raw_text_to_font_size = {}
+        for raw_text_tup in raw_text_blocks.get(page_num, []):
+            text = unicodedata.normalize("NFKC", raw_text_tup[0])
+            raw_text_to_font_size[text] = raw_text_tup[1]
         for para_block in paras_of_layout:
             para_type = para_block["type"]
-            if para_type != BlockType.Title:
+            if para_type != BlockType.TITLE:
                 continue
             has_level = para_block.get("level", None)
             if has_level is not None:
@@ -384,62 +216,99 @@ def adjust_title_level(pdf_file: Path | None, pipe_res: dict):
                 )
                 return
 
-            raw_text_map = {}
-            for raw_text in raw_text_blocks.get(page_num, []):
-                raw_text_map[raw_text[0]] = raw_text[1]
-
             font_size = None
+            bbox = None
             lines = para_block.get("lines", [])
             for line in lines:
                 spans = line.get("spans", [])
                 for span in spans:
                     content = span.get("content", "").strip()
-                    if content in raw_text_map:
-                        font_size = raw_text_map[content]
+                    content = unicodedata.normalize("NFKC", content)
+                    font_size = raw_text_to_font_size.get(content, None)
+                    bbox = span.get("bbox", None)
+                    break
+                break
 
-            # If the font size cannot be obtained directly from the PDF document,
-            # calculate an approximate font size based on the bounding box height.
-            if font_size is None:
-                bbox = para_block.get("bbox", None)
-                if bbox is not None:
-                    height = bbox[3] - bbox[1]
-                    lines = para_block.get("lines", None)
-                    if lines is not None and len(lines) > 1:
-                        height = height / len(lines)
-                    # NOTE: This formula is derived from simple observation
-                    # and may not be applicable to all situations.
-                    font_size = height * 0.78
-
-            if font_size is None:
-                continue
+            height = None
+            if bbox is not None and len(bbox) == 4:
+                height = bbox[3] - bbox[1]
+            if font_size is not None and height is not None and height > 0:
+                ratio = font_size / height
+                font_size_ratios.append(ratio)
 
             title_blocks.append(
-                (
+                [
                     font_size,
+                    height,
                     para_block,
-                )
+                ]
             )
 
     if len(title_blocks) == 0:
         return
 
-    title_blocks.sort(key=lambda x: x[0], reverse=True)
-    level = 1
-    prev_font_size = None
-    delta = 0.2
-    max_level = 8
-    for font_size, para_block in title_blocks:
-        if prev_font_size is not None and prev_font_size - font_size > delta:
-            level += 1
-            if level > max_level:
-                level = max_level
-        para_block["level"] = level
-        prev_font_size = font_size
+    def assign_title_level(titles, delta=0.2):
+        titles.sort(key=lambda x: x[0], reverse=True)
+        level = 1
+        prev_font_size = None
+        max_level = max_title_level
+        for title_block in titles:
+            font_size = title_block[0]
+            para_block = title_block[2]
+            if prev_font_size is not None and prev_font_size - font_size > delta:
+                level += 1
+                if level > max_level:
+                    level = max_level
+            para_block["level"] = level
+            prev_font_size = font_size
+
+    # Assign title level base on the font size from the PDF
+    title_blocks_with_font_size = list(filter(lambda x: x[0] is not None, title_blocks))
+    assign_title_level(title_blocks_with_font_size)
+
+    # If the font size cannot be obtained directly from the PDF document,
+    # calculate an approximate font size based on the bounding box height.
+    font_size_factor = statistics.median(font_size_ratios) if font_size_ratios else 1.0
+    for title_block in title_blocks:
+        if title_block[0] is None and title_block[1] is not None:
+            title_block[0] = title_block[1] * font_size_factor
+
+    # Filter out title blocks if its font size can't be determined.
+    title_blocks = list(filter(lambda x: x[0] is not None, title_blocks))
+
+    if len(title_blocks_with_font_size) == 0:
+        # Assign title level base on the estimated font size
+        assign_title_level(title_blocks, delta=2)
+    else:
+        # Align to the title block which has the closest font size,
+        # or set to the next level if smaller than the last level
+        min_font_size = min(title_blocks_with_font_size, key=lambda x: x[0])[0]
+        deepest_title_block = max(
+            title_blocks_with_font_size, key=lambda x: x[2]["level"]
+        )
+        deepest_level = deepest_title_block[2]["level"]
+        if deepest_level > max_title_level:
+            deepest_level = max_title_level
+        delta = 2
+        for title_block in title_blocks:
+            # Only process those without assigned levels
+            if "level" in title_block[2]:
+                continue
+            # The font size of the current title block is too small
+            if title_block[0] < min_font_size - delta:
+                title_block[2]["level"] = deepest_level
+                continue
+
+            # Align to the title block which has the closest font size
+            closest_block = min(
+                title_blocks_with_font_size, key=lambda x: abs(x[0] - title_block[0])
+            )
+            title_block[2]["level"] = closest_block[2]["level"]
 
 
-def collect_all_text_blocks(pdf_path: Path) -> dict[int, list[tuple[str, float]]]:
+def collect_all_text_blocks(pdf_bytes: bytes) -> dict[int, list[tuple[str, float]]]:
     try:
-        with fitz.open(pdf_path) as doc:
+        with fitz.open(stream=io.BytesIO(pdf_bytes)) as doc:
             if not doc.is_pdf:
                 return {}
 
@@ -488,83 +357,191 @@ def collect_all_text_blocks(pdf_path: Path) -> dict[int, list[tuple[str, float]]
         return {}
 
 
-class DistributedOCRModel:
-    def __init__(
-        self,
-        parser_deployment_handle: ray.serve.handle.DeploymentHandle,
-    ):
-        self.parser_deployment_handle = parser_deployment_handle
-        # Default batch size for distributing OCR tasks, can be overridden by environment variable
-        self.min_batch_size = int(os.getenv("MINERU_OCR_MIN_BATCH_SIZE", 8))
+# # Extract texts from PDF by pdfium. But sometimes it can't correctly extract the font size.
+# # Keep the code for reference.
+# from mineru.utils.pdf_text_tool import get_page
+# def collect_all_text_blocks(pdf_bytes: bytes) -> dict[int, list[tuple[str, float]]]:
+#     pdf = None
+#     try:
+#         pdf = pdfium.PdfDocument(pdf_bytes)
+#         ret = {}
+#         for page_num, pdf_page in enumerate(pdf):
+#             page_data = get_page(pdf_page)
+#             texts = []
+#             for block in page_data.get("blocks", []):
+#                 for line in block.get("lines", []):
+#                     for span in line.get("spans", []):
+#                         font_size = span.get("font", {}).get("size", 1.0)
+#                         text_content = span.get("text", "").strip()
+#                         if text_content:
+#                             texts.append(
+#                                 (
+#                                     text_content,
+#                                     font_size,
+#                                 )
+#                             )
+#             if len(texts) > 0:
+#                 ret[page_num] = texts
+#         return ret
+#     except Exception:
+#         logger.exception("collect_all_text_blocks failed")
+#         return {}
+#     finally:
+#         if pdf is not None:
+#             pdf.close()
 
-    def ocr(
-        self,
-        img: np.ndarray | list | str | bytes,
-        det=True,
-        rec=True,
-        mfd_res=None,
-        tqdm_enable=False,
-    ):
-        if mfd_res is not None or not isinstance(img, list):
-            resp = self.parser_deployment_handle.ocr.remote(
-                img=img,
-                det=det,
-                rec=rec,
-                mfd_res=mfd_res,
-                tqdm_enable=tqdm_enable,
+
+def to_pdf_bytes(data: bytes, filename: str) -> tuple[bool, bytes]:
+    ext = Path(filename).suffix.lower()
+    if ext == PDF_EXT:
+        return True, sanitize_pdf(data)
+    elif ext in OFFICE_DOC_EXTS:
+        return True, office_doc_to_pdf(data, ext)
+    elif ext in IMAGE_EXTS:
+        return True, image_to_pdf(data)
+    else:
+        return False, b""
+
+
+def sanitize_pdf(pdf_bytes, start_page_id=0, end_page_id=None) -> bytes:
+    pdf, output_pdf = None, None
+    try:
+        pdf = pdfium.PdfDocument(pdf_bytes)
+        num_pages = len(pdf)
+
+        actual_start_page_id = start_page_id
+        if actual_start_page_id < 0:
+            logger.warning(f"start_page_id ({start_page_id}) is negative, using 0.")
+            actual_start_page_id = 0
+
+        actual_end_page_id = end_page_id
+        if (
+            actual_end_page_id is None
+            or actual_end_page_id < 0
+            or actual_end_page_id >= num_pages
+        ):
+            actual_end_page_id = num_pages - 1
+
+        page_indices = []
+        if actual_start_page_id > actual_end_page_id:
+            logger.warning(
+                f"start_page_id ({actual_start_page_id}) is greater than end_page_id ({actual_end_page_id}). Resulting PDF will be empty."
             )
-            return resp.result()
+        else:
+            page_indices = list(range(actual_start_page_id, actual_end_page_id + 1))
 
-        if isinstance(img, list) and det is True:
-            raise ValueError("When input a list of images, det must be false")
+        output_pdf = pdfium.PdfDocument.new()
+        if page_indices:
+            output_pdf.import_pages(pdf, page_indices)
 
-        images_to_process: list = img
-        if not images_to_process:
-            return []
+        output_buffer = io.BytesIO()
+        output_pdf.save(output_buffer)
+        return output_buffer.getvalue()
 
-        num_images = len(images_to_process)
-        actual_batch_size = self.min_batch_size
+    except pdfium.PdfiumError as pe:
+        logger.error(f"pypdfium2 error during PDF processing: {pe}")
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error during PDF processing: {e}")
+        raise
+    finally:
+        if pdf is not None:
+            pdf.close()
+        if output_pdf is not None:
+            output_pdf.close()
 
-        mini_batches_img = [
-            images_to_process[i : i + actual_batch_size]
-            for i in range(0, num_images, actual_batch_size)
+
+def get_soffice_cmd() -> str | None:
+    return shutil.which("soffice")
+
+
+def office_doc_to_pdf(content: bytes, ext: str) -> bytes:
+    soffice_cmd = get_soffice_cmd()
+    if soffice_cmd is None:
+        raise RuntimeError("soffice command not found")
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        output_dir = Path(tmp_dir)
+        input_path = output_dir / f"input.{ext}"
+        input_path.write_bytes(content)
+
+        target_format = "pdf"
+
+        cmd = [
+            soffice_cmd,
+            "--headless",
+            "--norestore",
+            "--convert-to",
+            target_format,
+            "--outdir",
+            str(output_dir),
+            str(input_path),
         ]
 
-        logger.info(
-            f"DistributedOCRModel: Distributing {num_images} OCR tasks in {len(mini_batches_img)} mini-batches "
-            f"of approx size {actual_batch_size} via handle: {self.parser_deployment_handle}"
-        )
-
-        remote_responses: list[ray.serve.handle.DeploymentResponse] = []
-        for i, batch_img_data in enumerate(mini_batches_img):
-            resp = self.parser_deployment_handle.ocr.remote(
-                img=batch_img_data,
-                det=det,
-                rec=rec,
-                mfd_res=None,
-                tqdm_enable=tqdm_enable,
-            )
-            remote_responses.append(resp)
-
-        all_results = []
-        for i, resp_handle in enumerate(remote_responses):
-            batch_result = resp_handle.result()
-            # Reference: https://github.com/opendatalab/MinerU/blob/a911c29fbb9fe175a034c7a2f49abd7581088cd6/magic_pdf/model/sub_modules/ocr/paddleocr2pytorch/pytorch_paddle.py#L106
-            if det and rec:
-                # unreachable
-                pass
-            elif det and not rec:
-                # unreachable
-                pass
-            elif not det and rec:
-                if len(all_results) == 0:
-                    all_results.append([])
-                all_results[0].extend(batch_result[0])
-            else:
-                # undefined
-                pass
-            logger.info(
-                f"DistributedOCRModel: OCR Mini-batch {i + 1}/{len(remote_responses)} completed."
+        process = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if process.returncode != 0:
+            raise RuntimeError(
+                f'convert failed, cmd: "{" ".join(cmd)}", output: {process.stdout.decode()}, error: {process.stderr.decode()}'
             )
 
-        return all_results
+        output_file = output_dir / f"{input_path.stem}.{target_format}"
+        return output_file.read_bytes()
+
+
+def image_to_pdf(image_bytes: bytes) -> bytes:
+    pdf_buffer = io.BytesIO()
+    image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    image.save(pdf_buffer, format="PDF", save_all=True)
+    pdf_bytes = pdf_buffer.getvalue()
+    return pdf_bytes
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Adjust title levels in a middle.json file."
+    )
+    parser.add_argument("pdf_file", type=str, help="Path to the PDF file")
+    parser.add_argument(
+        "middle_json_path", type=str, help="Path to the middle.json file"
+    )
+    parser.add_argument("--dump-markdown", action="store_true")
+    args = parser.parse_args()
+
+    logging.basicConfig(level=logging.INFO)
+
+    try:
+        with open(args.pdf_file, "rb") as f:
+            pdf_bytes = f.read()
+        with open(args.middle_json_path, "r", encoding="utf-8") as f:
+            middle_json_data = json.load(f)
+
+        for page_num, page_info in enumerate(middle_json_data.get("pdf_info", [])):
+            paras_of_layout: list[dict[str, Any]] = page_info.get("para_blocks")
+            if not paras_of_layout:
+                continue
+            for para_block in paras_of_layout:
+                para_type = para_block["type"]
+                if para_type != BlockType.TITLE:
+                    continue
+                para_block.pop("level", None)
+
+        adjust_title_level(pdf_bytes, middle_json_data)
+
+        if not args.dump_markdown:
+            print(json.dumps(middle_json_data, ensure_ascii=False, indent=2))
+        else:
+            from mineru.backend.pipeline.pipeline_middle_json_mkcontent import (
+                union_make,
+            )
+
+            _monkey_patch_mineru()
+            markdown = union_make(middle_json_data.get("pdf_info", []), "mm_markdown")
+            print(markdown)
+    except FileNotFoundError:
+        logger.error(f"Error: File not found at {args.middle_json_path}")
+    except json.JSONDecodeError:
+        logger.error(f"Error: Could not decode JSON from {args.middle_json_path}")
+    except Exception as e:
+        logger.error(f"An unexpected error occurred: {e}")
