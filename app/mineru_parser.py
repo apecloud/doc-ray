@@ -30,6 +30,12 @@ else:
 max_title_level = 8
 
 
+def _sanitize_string_for_utf8(s: str) -> str:
+    if not isinstance(s, str):
+        return s
+    return s.encode("utf-8", "replace").decode("utf-8", "replace")
+
+
 def _monkey_patch_mineru():
     import mineru.backend.pipeline.pipeline_middle_json_mkcontent as mkcontent
 
@@ -80,6 +86,11 @@ class MinerUParser:
         config_reader.CONFIG_FILE_NAME = str(path.absolute())
         return True
 
+    def _is_cpu_device(self) -> bool:
+        from mineru.utils import config_reader
+
+        return config_reader.get_device() == "cpu"
+
     def parse(self, data: bytes, filename: str) -> ParseResult:
         self._prepare()
 
@@ -101,9 +112,27 @@ class MinerUParser:
             temp_dir = temp_dir_obj.name
 
         try:
+            formula_enable = True
+            table_enable = True
+            force_enable = (
+                os.getenv("MINERU_FORCE_CPU_FORMULA_AND_TABLE_RECOGNITION", "0") == "1"
+            )
+            if not force_enable and self._is_cpu_device():
+                logger.info(
+                    "Running on CPU, disabling formula and table recognition for performance. "
+                    "Set MINERU_FORCE_CPU_FORMULA_AND_TABLE_RECOGNITION=1 to override."
+                )
+                formula_enable = False
+                table_enable = False
+
             pdf_bytes_list = [pdf_data]
             lang_list = ["ch"]
-            result = doc_analyze(pdf_bytes_list, lang_list)
+            result = doc_analyze(
+                pdf_bytes_list,
+                lang_list,
+                formula_enable=formula_enable,
+                table_enable=table_enable,
+            )
 
             infer_result = result[0][0]
             images_list = result[1][0]
@@ -138,7 +167,9 @@ class MinerUParser:
                             images_dict[name] = base64.b64encode(f.read()).decode()
 
             return ParseResult(
-                markdown=markdown, middle_json=middle_json_str, images=images_dict
+                markdown=_sanitize_string_for_utf8(markdown),
+                middle_json=_sanitize_string_for_utf8(middle_json_str),
+                images=images_dict,
             )
         except:
             logger.exception("MinerUParser failed")
