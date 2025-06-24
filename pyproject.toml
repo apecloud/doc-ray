@@ -10,9 +10,9 @@ dependencies = [
     # Pin grpcio to avoid memory leaks, see https://github.com/ray-project/ray/issues/52639
     "grpcio==1.64.1",
     "memray>=1.17.2",
-    "mineru[core]>=2.0.4",
+    "mineru[core]>=2.0.6",
     "pillow>=11.2.1",
-    "pymupdf==1.26.0",
+    "pymupdf==1.26.1",
 ]
 
 [project.optional-dependencies]
