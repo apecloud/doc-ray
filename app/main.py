@@ -185,6 +185,28 @@ except Exception as e:
 # 3. DocumentParser is now a Serve Deployment. It will be bound into the application.
 #    The handle will be created by `DocumentParser.bind()` below.
 
+doc_parser_num_replicas = os.getenv("PARSER_NUM_REPLICAS", "auto")
+doc_parser_auto_scaling_config = AutoscalingConfig(
+    initial_replicas=int(os.getenv("PARSER_AUTOSCALING_INITIAL_REPLICAS", "1")),
+    min_replicas=int(os.getenv("PARSER_AUTOSCALING_MIN_REPLICAS", "1")),
+    max_replicas=int(os.getenv("PARSER_AUTOSCALING_MAX_REPLICAS", "4")),
+    target_ongoing_requests=int(
+        os.getenv("PARSER_AUTOSCALING_TARGET_ONGOING_REQUESTS", "1")
+    ),
+)
+
+if is_standalone_mode():
+    # Disable auto scaling for standalone mode
+    doc_parser_num_replicas = 1
+    doc_parser_auto_scaling_config = None
+
+doc_parser_deployment = DocumentParser.options(
+    ray_actor_options=_parser_actor_options,
+    max_ongoing_requests=int(os.getenv("PARSER_MAX_ONGOING_REQUESTS", "2")),
+    num_replicas=doc_parser_num_replicas,
+    autoscaling_config=doc_parser_auto_scaling_config,
+).bind()
+
 # 4. Bind the ServeController with its dependencies to the application.
 # This is what `serve run` will use based on the import path in the config file.
 # (e.g., `doc_parser_service.app.main:app_builder` if we named this `app_builder`)
@@ -195,27 +217,17 @@ if state_manager_actor and background_parser_actor:  # Ensure both actors are av
     # Its .bind() method creates a DeploymentHandle that ServeController will use.
     # Ray Serve will manage the lifecycle of DocumentParserDeployment.
     options = {}
+    enable_parallel_parsing = True
     if is_standalone_mode():
         # In standalone mode, we assign all CPU resources of the host to the DocumentParser
         options["num_cpus"] = 0
+        # Disable parallel parsing in standalone mode, unless ENABLE_PARALLEL_PARSING is set to "1"
+        enable_parallel_parsing = os.getenv("ENABLE_PARALLEL_PARSING", "0") == "1"
     entrypoint = ServeController.options(ray_actor_options=options).bind(
         state_manager_actor_handle=state_manager_actor,
         background_parser_actor_handle=background_parser_actor,
-        parser_deployment_handle=DocumentParser.options(
-            ray_actor_options=_parser_actor_options,
-            max_ongoing_requests=int(os.getenv("PARSER_MAX_ONGOING_REQUESTS", "1")),
-            num_replicas=os.getenv("PARSER_NUM_REPLICAS", "auto"),
-            autoscaling_config=AutoscalingConfig(
-                initial_replicas=int(
-                    os.getenv("PARSER_AUTOSCALING_INITIAL_REPLICAS", "1")
-                ),
-                min_replicas=int(os.getenv("PARSER_AUTOSCALING_MIN_REPLICAS", "1")),
-                max_replicas=int(os.getenv("PARSER_AUTOSCALING_MAX_REPLICAS", "4")),
-                target_ongoing_requests=int(
-                    os.getenv("PARSER_AUTOSCALING_TARGET_ONGOING_REQUESTS", "5")
-                ),
-            ),
-        ).bind(),  # Bind DocumentParser deployment
+        parser_deployment_handle=doc_parser_deployment,
+        enable_parallel_parsing=enable_parallel_parsing,
     )
     logger.info("ServeController bound with dependencies. Ready for serving.")
 else:

@@ -66,10 +66,12 @@ class ServeController:
         state_manager_actor_handle: ActorHandle,
         background_parser_actor_handle: ActorHandle,
         parser_deployment_handle: DeploymentHandle,
+        enable_parallel_parsing: bool = False,
     ):
         self._state_manager: ActorHandle = state_manager_actor_handle
         self._background_parser: ActorHandle = background_parser_actor_handle
         self._parser_deployment_handle: DeploymentHandle = parser_deployment_handle
+        self._enable_parallel_parsing = enable_parallel_parsing
 
         logger.info(
             "ServeController initialized with StateManager, BackgroundParsingActor, "
@@ -118,16 +120,28 @@ class ServeController:
         # The task will be scheduled and executed by Ray on this actor.
 
         # Call the method on the BackgroundParsingActor
-        self._background_parser.parse_document.remote(
-            job_id,
-            document_content_bytes,
-            file.filename,
-            None,
-            None,
-            file.content_type,
-            self._parser_deployment_handle,  # Pass the parser handle
-            self._state_manager,  # Pass the state manager handle
-        )
+        if not self._enable_parallel_parsing:
+            self._background_parser.parse_document.remote(
+                job_id,
+                document_content_bytes,
+                file.filename,
+                None,
+                None,
+                file.content_type,
+                self._parser_deployment_handle,  # Pass the parser handle
+                self._state_manager,  # Pass the state manager handle
+            )
+        else:
+            self._background_parser.parse_document_parallel.remote(
+                job_id,
+                document_content_bytes,
+                file.filename,
+                None,
+                None,
+                file.content_type,
+                self._parser_deployment_handle,  # Pass the parser handle
+                self._state_manager,  # Pass the state manager handle
+            )
         logger.info(
             f"Parsing task for job_id {job_id} (file: '{file.filename}') submitted to run on Ray actor."
         )

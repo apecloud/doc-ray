@@ -28,7 +28,9 @@ else:
     logger = logging.getLogger(__name__)
 
 max_title_level = 8
-
+image_dir_name = "images"
+_monkey_patched = False
+_orig_para_split = None
 
 def _sanitize_string_for_utf8(s: str) -> str:
     if not isinstance(s, str):
@@ -36,19 +38,36 @@ def _sanitize_string_for_utf8(s: str) -> str:
     return s.encode("utf-8", "replace").decode("utf-8", "replace")
 
 
+def _my_get_title_level(block):
+    title_level = block.get("level", 1)
+    if title_level > max_title_level:
+        title_level = max_title_level
+    elif title_level < 1:
+        title_level = 0
+    return title_level
+
+
+def _my_para_split(page_info_list: list):
+    # Do nothing
+    return
+
+
 def _monkey_patch_mineru():
+    global _monkey_patched
+    if _monkey_patched:
+        return
+
+    _monkey_patched = True
+
+    import mineru.backend.pipeline.para_split as para_split
     import mineru.backend.pipeline.pipeline_middle_json_mkcontent as mkcontent
 
-    def my_get_title_level(block):
-        title_level = block.get("level", 1)
-        if title_level > max_title_level:
-            title_level = max_title_level
-        elif title_level < 1:
-            title_level = 0
-        return title_level
-
     # The original get_title_level only supports 4 levels, which is too small
-    mkcontent.get_title_level = my_get_title_level
+    mkcontent.get_title_level = _my_get_title_level
+
+    global _orig_para_split
+    _orig_para_split = para_split.para_split
+    para_split.para_split = _my_para_split
 
 
 @dataclass
@@ -64,12 +83,13 @@ class MinerUParser:
     def __init__(self):
         self.prepared = False
 
+        _monkey_patch_mineru()
+
     def _prepare(self):
         if self.prepared:
             return
         if not self._set_config_path():
             raise Exception("mineru.json not found")
-        _monkey_patch_mineru()
         self.prepared = True
 
     def _set_config_path(self) -> bool:
@@ -91,7 +111,9 @@ class MinerUParser:
 
         return config_reader.get_device() == "cpu"
 
-    def parse(self, data: bytes, filename: str) -> ParseResult:
+    def parse(
+        self, data: bytes, filename: str, start_page_idx=None, end_page_idx=None
+    ) -> ParseResult:
         self._prepare()
 
         # Lazily import these modules because they are slow to load
@@ -99,9 +121,8 @@ class MinerUParser:
             result_to_middle_json,
         )
         from mineru.backend.pipeline.pipeline_analyze import doc_analyze
-        from mineru.backend.pipeline.pipeline_middle_json_mkcontent import union_make
 
-        ok, pdf_data = to_pdf_bytes(data, filename)
+        ok, pdf_data = to_pdf_bytes(data, filename, start_page_idx, end_page_idx)
         if not ok:
             raise Exception(f"Unsupported file format, filename: {filename}")
 
@@ -141,7 +162,7 @@ class MinerUParser:
             _ocr_enable = result[4][0]
 
             local_image_dir = os.path.join(
-                temp_dir, md5(filename.encode("utf-8")).hexdigest(), "images"
+                temp_dir, md5(filename.encode("utf-8")).hexdigest(), image_dir_name
             )
             os.makedirs(local_image_dir, exist_ok=True)
             image_writer = FileBasedDataWriter(local_image_dir)
@@ -149,13 +170,14 @@ class MinerUParser:
             middle_json = result_to_middle_json(
                 infer_result, images_list, pdf_doc, image_writer, _lang, _ocr_enable
             )
-            adjust_title_level(pdf_data, middle_json)
-            add_merged_text_field(middle_json)
+            if start_page_idx is None and end_page_idx is None:
+                # Hack: do para_split() and other processing only when parsing the whole PDF file.
+                global _orig_para_split
+                if _orig_para_split is not None:
+                    _orig_para_split(middle_json.get("pdf_info", []))
+                adjust_title_level(pdf_data, middle_json)
+                add_merged_text_field(middle_json)
             middle_json_str = json.dumps(middle_json, ensure_ascii=False)
-
-            pdf_info = middle_json["pdf_info"]
-            image_dir = str(os.path.basename(local_image_dir))
-            markdown = union_make(pdf_info, MakeMode.MM_MD, image_dir)
 
             images_dict = {}
             if os.path.exists(local_image_dir) and os.listdir(local_image_dir):
@@ -167,7 +189,7 @@ class MinerUParser:
                             images_dict[name] = base64.b64encode(f.read()).decode()
 
             return ParseResult(
-                markdown=_sanitize_string_for_utf8(markdown),
+                markdown=self.middle_json_to_markdown(middle_json, image_dir_name),
                 middle_json=_sanitize_string_for_utf8(middle_json_str),
                 images=images_dict,
             )
@@ -177,6 +199,91 @@ class MinerUParser:
         finally:
             if temp_dir_obj is not None:
                 temp_dir_obj.cleanup()
+
+    def sanitize_pdf(self, data: bytes, filename: str) -> tuple[bytes, int]:
+        ok, pdf_data = to_pdf_bytes(data, filename)
+        if not ok:
+            raise Exception(f"Unsupported file format, filename: {filename}")
+
+        with fitz.open(stream=io.BytesIO(pdf_data)) as doc:
+            return pdf_data, len(doc)
+
+    def middle_json_to_markdown(self, middle_json: dict, image_dir="images") -> str:
+        from mineru.backend.pipeline.pipeline_middle_json_mkcontent import union_make
+
+        pdf_info = middle_json["pdf_info"]
+        markdown = union_make(pdf_info, MakeMode.MM_MD, image_dir)
+        return _sanitize_string_for_utf8(markdown)
+
+    def merge_partial_results(self, pdf_bytes: bytes, partial_results: list[dict]) -> ParseResult:
+        if not partial_results:
+            return ParseResult()
+
+        # 1. Merge images by combining dictionaries
+        merged_images = {}
+        for res in partial_results:
+            merged_images.update(res.get("images", {}))
+
+        # 2. Merge middle_json by combining their 'pdf_info' lists
+        middle_json_dicts = [
+            json.loads(res["middle_json"])
+            for res in partial_results
+            if res.get("middle_json")
+        ]
+        if not middle_json_dicts:
+            return ParseResult()
+
+        merged_middle_json_dict = merge_middle_jsons(middle_json_dicts)
+        global _orig_para_split
+        if _orig_para_split is not None:
+            _orig_para_split(merged_middle_json_dict.get("pdf_info", []))
+
+        adjust_title_level(pdf_bytes, merged_middle_json_dict)
+        add_merged_text_field(merged_middle_json_dict)
+
+        merged_middle_json_str = json.dumps(merged_middle_json_dict, ensure_ascii=False)
+
+        # 3. Re-generate the final markdown from the merged middle_json
+        merged_markdown = self.middle_json_to_markdown(merged_middle_json_dict)
+
+        return ParseResult(
+            markdown=merged_markdown,
+            middle_json=_sanitize_string_for_utf8(merged_middle_json_str),
+            images=merged_images,
+        )
+
+
+def merge_middle_jsons(middle_json_list: list[dict]) -> dict:
+    if not middle_json_list:
+        return {}
+    # Use the first result as the base for metadata.
+    merged_json = middle_json_list[0].copy()
+    # The 'pdf_info' contains a list of pages. We will extend this list with pages from other results.
+    merged_pdf_info: list = merged_json.get("pdf_info", [])
+
+    for middle_json in middle_json_list[1:]:
+        merged_pdf_info.extend(middle_json.get("pdf_info", []))
+
+    # Rewrite page num.
+    for idx, page_info in enumerate(merged_pdf_info):
+        page_info["page_idx"] = idx
+        para_blocks = page_info.get("para_blocks", [])
+        for para_block in para_blocks:
+            para_block["page_num"] = idx
+
+    # Clear title level.
+    for page_info in merged_pdf_info:
+        para_blocks = page_info.get("para_blocks", [])
+        for para_block in para_blocks:
+            para_block.pop("level", None)
+
+    # Call para_split()
+    global _orig_para_split
+    if _orig_para_split is not None:
+        _orig_para_split(merged_pdf_info)
+
+    merged_json["pdf_info"] = merged_pdf_info
+    return merged_json
 
 
 def add_merged_text_field(pipe_res: dict):
@@ -422,10 +529,12 @@ def collect_all_text_blocks(pdf_bytes: bytes) -> dict[int, list[tuple[str, float
 #             pdf.close()
 
 
-def to_pdf_bytes(data: bytes, filename: str) -> tuple[bool, bytes]:
+def to_pdf_bytes(
+    data: bytes, filename: str, start_page_idx=None, end_page_idx=None
+) -> tuple[bool, bytes]:
     ext = Path(filename).suffix.lower()
     if ext == PDF_EXT:
-        return True, sanitize_pdf(data)
+        return True, sanitize_pdf(data, start_page_idx, end_page_idx)
     elif ext in OFFICE_DOC_EXTS:
         return True, office_doc_to_pdf(data, ext)
     elif ext in IMAGE_EXTS:
@@ -434,14 +543,14 @@ def to_pdf_bytes(data: bytes, filename: str) -> tuple[bool, bytes]:
         return False, b""
 
 
-def sanitize_pdf(pdf_bytes, start_page_id=0, end_page_id=None) -> bytes:
+def sanitize_pdf(pdf_bytes, start_page_id=None, end_page_id=None) -> bytes:
     pdf, output_pdf = None, None
     try:
         pdf = pdfium.PdfDocument(pdf_bytes)
         num_pages = len(pdf)
 
-        actual_start_page_id = start_page_id
-        if actual_start_page_id < 0:
+        actual_start_page_id = 0 if start_page_id is None else start_page_id
+        if actual_start_page_id < 0:  # Check again after setting default
             logger.warning(f"start_page_id ({start_page_id}) is negative, using 0.")
             actual_start_page_id = 0
 
