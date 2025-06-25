@@ -39,13 +39,26 @@ class DocumentParser:
         logger.info("DocumentParser initialized.")
 
     async def parse(
-        self, data: bytes, filename: str, start_page_idx=None, end_page_idx=None
+        self,
+        data: bytes,
+        filename: str,
+        start_page_idx=None,
+        end_page_idx=None,
+        formula_enable=True,
+        table_enable=True,
     ) -> dict:
         replica_context = serve.get_replica_context()
         logger.info(f"Replica {replica_context.replica_id} received parse request.")
 
         try:
-            result = self.mineru.parse(data,filename,start_page_idx,end_page_idx)
+            result = self.mineru.parse(
+                data,
+                filename,
+                start_page_idx,
+                end_page_idx,
+                formula_enable,
+                table_enable,
+            )
             logger.info(f"Replica {replica_context.replica_id} completed parse.")
 
             # Do not return a ParseResult object directly. When Ray serializes this object,

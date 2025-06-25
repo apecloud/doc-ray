@@ -1,8 +1,9 @@
+import json
 import logging
 import os
 from typing import Dict, Optional
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 from ray import serve
 from ray.actor import ActorHandle
@@ -82,12 +83,31 @@ class ServeController:
     async def submit_document(
         self,
         file: UploadFile = File(...),
+        parser_params: str = Form(
+            "{}",
+            description="A JSON string of parameters for the parser, e.g., '{\"formula_enable\": false}'.",
+        ),
     ):
         """
         Submits a document (via file upload) for asynchronous parsing.
-        Optionally specify a parser_type (string) and parser_params (JSON string).
+        Optionally specify parser_params (JSON string) for parsing options.
         """
-        logger.info(f"Received submission request with file: '{file.filename}', ")
+        try:
+            parser_params_obj = json.loads(parser_params)
+            if not isinstance(parser_params_obj, dict):
+                raise HTTPException(
+                    status_code=400,
+                    detail="parser_params must be a valid JSON object string.",
+                )
+        except json.JSONDecodeError:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid JSON format for parser_params.",
+            )
+
+        logger.info(
+            f"Received submission request with file: '{file.filename}', parser_params: {parser_params}"
+        )
 
         if not file.filename or file.size == 0:
             raise HTTPException(
@@ -109,6 +129,7 @@ class ServeController:
             "filename": file.filename,
             "content_type": file.content_type,
             "size": file.size,
+            "parser_params": parser_params_obj,
         }
         job_id = await self._state_manager.submit_job.remote(
             initial_data=job_initial_data
@@ -125,8 +146,8 @@ class ServeController:
                 job_id,
                 document_content_bytes,
                 file.filename,
-                None,
-                None,
+                None,  # parser_type
+                parser_params_obj,
                 file.content_type,
                 self._parser_deployment_handle,  # Pass the parser handle
                 self._state_manager,  # Pass the state manager handle
@@ -136,8 +157,8 @@ class ServeController:
                 job_id,
                 document_content_bytes,
                 file.filename,
-                None,
-                None,
+                None,  # parser_type
+                parser_params_obj,
                 file.content_type,
                 self._parser_deployment_handle,  # Pass the parser handle
                 self._state_manager,  # Pass the state manager handle

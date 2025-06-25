@@ -34,13 +34,18 @@ class BackgroundParsingActor:
         # For simplicity, assuming ray.logger is available and configured
         actor_logger = ray.logger  # or logging.getLogger(__name__) if preferred
 
+        parser_params = parser_params or {}
+
         try:
             actor_logger.info(
                 f"BackgroundParsingActor: Start parsing for job_id: {job_id}, file: {filename}"
             )
             start_time = time.time()
             result = await parser_deployment_handle.parse.remote(
-                document_content_bytes, filename
+                data=document_content_bytes,
+                filename=filename,
+                formula_enable=parser_params.get("formula_enable", True),
+                table_enable=parser_params.get("table_enable", True),
             )
             end_time = time.time()
             parsing_duration = end_time - start_time
@@ -73,6 +78,8 @@ class BackgroundParsingActor:
         # For simplicity, assuming ray.logger is available and configured
         actor_logger = ray.logger  # or logging.getLogger(__name__) if preferred
 
+        parser_params = parser_params or {}
+
         from .mineru_parser import MinerUParser
 
         # Instantiate MinerUParser locally within this replica to do the work.
@@ -103,7 +110,12 @@ class BackgroundParsingActor:
                 start_page_idx = i
                 end_page_idx = min(i + batch_size - 1, page_count - 1)
                 ref = parser_deployment_handle.parse.remote(
-                    sanitized_pdf_bytes, filename, start_page_idx, end_page_idx
+                    data=sanitized_pdf_bytes,
+                    filename=filename,
+                    start_page_idx=start_page_idx,
+                    end_page_idx=end_page_idx,
+                    formula_enable=parser_params.get("formula_enable", True),
+                    table_enable=parser_params.get("table_enable", True),
                 )
                 pending_refs.append(ref)
                 all_refs.append(ref)

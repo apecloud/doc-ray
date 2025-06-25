@@ -32,6 +32,7 @@ image_dir_name = "images"
 _monkey_patched = False
 _orig_para_split = None
 
+
 def _sanitize_string_for_utf8(s: str) -> str:
     if not isinstance(s, str):
         return s
@@ -106,13 +107,14 @@ class MinerUParser:
         config_reader.CONFIG_FILE_NAME = str(path.absolute())
         return True
 
-    def _is_cpu_device(self) -> bool:
-        from mineru.utils import config_reader
-
-        return config_reader.get_device() == "cpu"
-
     def parse(
-        self, data: bytes, filename: str, start_page_idx=None, end_page_idx=None
+        self,
+        data: bytes,
+        filename: str,
+        start_page_idx=None,
+        end_page_idx=None,
+        formula_enable=True,
+        table_enable=True,
     ) -> ParseResult:
         self._prepare()
 
@@ -133,15 +135,12 @@ class MinerUParser:
             temp_dir = temp_dir_obj.name
 
         try:
-            formula_enable = True
-            table_enable = True
-            force_enable = (
-                os.getenv("MINERU_FORCE_CPU_FORMULA_AND_TABLE_RECOGNITION", "0") == "1"
+            disable_formula_and_table_recog = (
+                os.getenv("MINERU_DISABLE_FORMULA_AND_TABLE_RECOGNITION", "0") == "1"
             )
-            if not force_enable and self._is_cpu_device():
+            if disable_formula_and_table_recog:
                 logger.info(
-                    "Running on CPU, disabling formula and table recognition for performance. "
-                    "Set MINERU_FORCE_CPU_FORMULA_AND_TABLE_RECOGNITION=1 to override."
+                    "Formula and table recognition has been disabled. To enable it, set the environment variable MINERU_DISABLE_FORMULA_AND_TABLE_RECOGNITION to 0"
                 )
                 formula_enable = False
                 table_enable = False
@@ -215,7 +214,9 @@ class MinerUParser:
         markdown = union_make(pdf_info, MakeMode.MM_MD, image_dir)
         return _sanitize_string_for_utf8(markdown)
 
-    def merge_partial_results(self, pdf_bytes: bytes, partial_results: list[dict]) -> ParseResult:
+    def merge_partial_results(
+        self, pdf_bytes: bytes, partial_results: list[dict]
+    ) -> ParseResult:
         if not partial_results:
             return ParseResult()
 
