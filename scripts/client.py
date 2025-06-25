@@ -16,17 +16,20 @@ logger = logging.getLogger(__name__)
 DOCRAY_HOST = os.environ.get("DOCRAY_HOST", "http://localhost:8639")
 
 
-def parse_file(path: Path):
+def parse_file(path: Path, parser_params: str = "{}"):
     if not DOCRAY_HOST:
         raise ValueError("DOCRAY_HOST environment variable is not set.")
 
     job_id = None
     try:
+        # Data payload for the form, including parser parameters
+        data = {"parser_params": parser_params}
+
         # Submit file to doc-ray
         if isinstance(path, Path):
             with open(path, "rb") as f:
                 files = {"file": (path.name, f)}
-                response = requests.post(f"{DOCRAY_HOST}/submit", files=files)
+                response = requests.post(f"{DOCRAY_HOST}/submit", files=files, data=data)
         else:  # Assume it's a URL (string), path is actually a string here
             url_path = str(path)  # Keep original for requests.get
             parsed_url = urlparse(url_path)
@@ -37,9 +40,13 @@ def parse_file(path: Path):
             with requests.get(url_path, stream=True) as r:
                 r.raise_for_status()  # Check if the download was successful
                 files = {"file": (filename, r.raw)}
-                response = requests.post(f"{DOCRAY_HOST}/submit", files=files)
+                response = requests.post(f"{DOCRAY_HOST}/submit", files=files, data=data)
 
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except:
+            logger.error(f"submit failed with status code {response.status_code} and content: {response.text}")
+            raise
         submit_response = response.json()
         job_id = submit_response["job_id"]
         # Use filename if path is URL, otherwise path.name
@@ -117,6 +124,12 @@ def main():
         help="The path to the local file or the URL of the file to be parsed.",
     )
     parser.add_argument(
+        "--parser-params",
+        type=str,
+        default="{}",
+        help="A JSON string of parameters for the parser, e.g., \'{\"formula_enable\": false}\'.",
+    )
+    parser.add_argument(
         "--dump-middle-json",
         action="store_true",
         help="Dump the middle JSON result",
@@ -136,7 +149,7 @@ def main():
 
     try:
         logger.info(f"Starting to parse file: {input_path}")
-        result = parse_file(input_path)
+        result = parse_file(input_path, args.parser_params)
         if args.dump_middle_json:
             print("\nMiddle JSON:\n")
             print(result["middle_json"])

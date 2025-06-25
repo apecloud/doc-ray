@@ -41,10 +41,11 @@ class JobStateManager:
             filename = initial_data.get("filename", "N/A")
             content_type = initial_data.get("content_type", "N/A")
             size_bytes = initial_data.get("size", "N/A")
-            parser_type_info = initial_data.get("parser_type", "default")
+            parser_type_info = initial_data.get("parser_type", "N/A")
+            parser_params_info = initial_data.get("parser_params", {})
             data_summary = (
                 f"File: {filename}, Type: {content_type}, Size: {size_bytes} bytes, "
-                f"Parser: {parser_type_info}"
+                f"Parser: {parser_type_info}, Params: {parser_params_info}"
             )
         elif initial_data:  # Fallback for other types, though not expected now
             data_summary = str(initial_data)[:200]
