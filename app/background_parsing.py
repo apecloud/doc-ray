@@ -143,6 +143,7 @@ class BackgroundParsingActor:
                 sanitized_pdf_bytes,
                 partial_results,
             )
+            final_result.pdf_data = sanitized_pdf_bytes
             # Do not return ParseResult object directly.
             final_result = asdict(final_result)
 

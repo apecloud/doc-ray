@@ -78,6 +78,7 @@ class ParseResult:
     images: dict[str, str] = field(
         default_factory=dict
     )  # image name => base64-decoded image data
+    pdf_data: bytes | None = None
 
 
 class MinerUParser:
@@ -187,11 +188,14 @@ class MinerUParser:
                             name = f"images/{file}"
                             images_dict[name] = base64.b64encode(f.read()).decode()
 
-            return ParseResult(
+            result = ParseResult(
                 markdown=self.middle_json_to_markdown(middle_json, image_dir_name),
                 middle_json=_sanitize_string_for_utf8(middle_json_str),
                 images=images_dict,
             )
+            if start_page_idx is None:
+                result.pdf_data = pdf_data
+            return result
         except:
             logger.exception("MinerUParser failed")
             raise

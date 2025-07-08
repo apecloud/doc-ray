@@ -1,3 +1,4 @@
+import base64
 import json
 import logging
 import os
@@ -40,6 +41,7 @@ class Result(BaseModel):
     markdown: str
     middle_json: str
     images: Dict[str, str]
+    pdf_data: str  # Base64 encoded
 
 
 class ResultResponse(BaseModel):
@@ -202,6 +204,7 @@ class ServeController:
                     markdown=result_data.get("markdown", ""),
                     middle_json=result_data.get("middle_json", ""),
                     images=result_data.get("images", []),
+                    pdf_data=base64.b64encode(result_data.get("pdf_data", b"")).decode(),
                 ),
             )
         elif current_status == "failed":
