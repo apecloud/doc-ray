@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
 import argparse
+import base64
+import json
 import logging
 import os
 import time
@@ -116,6 +118,43 @@ def parse_file(path: Path, parser_params: str = "{}"):
                 logger.warning(f"Failed to delete DocRay job {job_id}: {e}")
 
 
+def dump_result(result: dict, output_dir: Path, filename_base: str):
+    """Dumps the parsing result to the specified directory."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Dump markdown
+    md_path = output_dir / f"{filename_base}.md"
+    md_path.write_text(result["markdown"], encoding="utf-8")
+    logger.info(f"Markdown content saved to {md_path}")
+
+    # Dump middle json
+    middle_json_path = output_dir / f"{filename_base}.json"
+    with open(middle_json_path, "w", encoding="utf-8") as f:
+        json.dump(json.loads(result["middle_json"]), f, indent=4, ensure_ascii=False)
+    logger.info(f"Middle JSON saved to {middle_json_path}")
+
+    # Dump PDF
+    if result.get("pdf_data"):
+        pdf_path = output_dir / f"{filename_base}.pdf"
+        pdf_data = base64.b64decode(result["pdf_data"])
+        pdf_path.write_bytes(pdf_data)
+        logger.info(f"PDF saved to {pdf_path}")
+
+    # Dump images
+    images_data = result.get("images", {})
+    if images_data:
+        # The image_name from server may contain path like "images/xxx.jpg"
+        for image_name, image_b64 in images_data.items():
+            # Create the full path for the image
+            image_path = output_dir / image_name
+            # Ensure the parent directory of the image exists
+            image_path.parent.mkdir(parents=True, exist_ok=True)
+            # Decode and write the image data
+            image_data = base64.b64decode(image_b64)
+            image_path.write_bytes(image_data)
+        logger.info(f"{len(images_data)} images saved to {output_dir / 'images'}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="DocRay client to parse a file.")
     parser.add_argument(
@@ -127,33 +166,51 @@ def main():
         "--parser-params",
         type=str,
         default="{}",
-        help="A JSON string of parameters for the parser, e.g., \'{\"formula_enable\": false}\'.",
+        help="A JSON string of parameters for the parser, e.g., '{\"formula_enable\": false}'.",
     )
     parser.add_argument(
         "--dump-middle-json",
         action="store_true",
-        help="Dump the middle JSON result",
+        help="Dump the middle JSON result to stdout.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        help="Directory to dump the entire result (markdown, json, images, pdf).",
     )
     args = parser.parse_args()
 
     input_path: str = args.input_path
+    filename_base = ""
 
     if input_path.startswith("http://") or input_path.startswith("https://"):
         logger.info(f"Input is a URL: {input_path}")
+        parsed_url = urlparse(input_path)
+        filename_base = Path(os.path.basename(parsed_url.path)).stem
+        if not filename_base:
+            filename_base = "downloaded_file"
     else:
-        input_path = Path(input_path)  # Convert to Path object if it's a local path
-        if not input_path.is_file():
+        path_obj = Path(input_path)
+        if not path_obj.is_file():
             logger.error(f"The file '{input_path}' does not exist or is not a file.")
             return
         logger.info(f"Input is a local file: {input_path}")
+        input_path = path_obj  # Convert to Path object
+        filename_base = path_obj.stem
 
     try:
         logger.info(f"Starting to parse file: {input_path}")
         result = parse_file(input_path, args.parser_params)
+
         if args.dump_middle_json:
             print("\nMiddle JSON:\n")
             print(result["middle_json"])
-    except Exception as e:
+
+        if args.output_dir:
+            output_dir = Path(args.output_dir)
+            dump_result(result, output_dir, filename_base)
+
+    except Exception:
         logger.error(
             f"An error occurred during the processing of '{input_path}'.", exc_info=True
         )
